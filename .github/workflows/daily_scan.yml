@@ -1,8 +1,12 @@
 name: Daily Market Close Scan
 on:
   schedule:
-    - cron: '30 20 * * 1-5' # Runs at 4:30 PM EST, Mon-Fri
-  workflow_dispatch: # Allows you to run it manually too
+    - cron: '30 21 * * 1-5' # Runs at 4:30 PM EST (9:30 PM UTC) Mon-Fri
+  workflow_dispatch: # Allows you to press a button to run it manually
+
+# This fix prevents the Node.js 20 deprecation failure
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -10,18 +14,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          
       - name: Install dependencies
-        run: pip install yfinance pandas
-      - name: Run Scanner
+        run: pip install yfinance pandas requests
+        
+      - name: Run Market Scanner
         run: python scanner.py
-      - name: Commit results
+        
+      - name: Commit and Push Results
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add daily_watchlist.csv
-          git commit -m "Update Daily Watchlist"
+          git commit -m "Update Daily Watchlist [skip ci]" || echo "No changes to commit"
           git push
