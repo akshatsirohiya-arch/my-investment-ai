@@ -5,68 +5,87 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 
 def get_total_market():
-    # Full US Market ~6,000+ tickers
     url = "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/all/all_tickers.txt"
-    r = requests.get(url)
-    # Filter for standard tickers (avoiding long warrants/options symbols)
-    return [t.strip().upper() for t in r.text.splitlines() if 1 <= len(t.strip()) <= 5]
+    try:
+        r = requests.get(url, timeout=15)
+        return [t.strip().upper() for t in r.text.splitlines() if 1 <= len(t.strip()) <= 5]
+    except:
+        return []
 
 def process_ticker(ticker):
     try:
-        # Download 60 days of data
-        data = yf.download(ticker, period="60d", interval="1d", progress=False, threads=False)
+        # auto_adjust=True handles splits/dividends automatically
+        data = yf.download(ticker, period="60d", interval="1d", progress=False, threads=False, auto_adjust=True)
         
         if data.empty or len(data) < 30:
             return None
 
-        # Calculate current price and basic filters
-        curr_p = float(data['Close'].iloc[-1])
-        if curr_p < 5.0: return None # Price Floor
+        # Fix for Multi-Index columns (handles tuple headers)
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
 
-        # --- THE STAIRCASE PATTERN LOGIC ---
-        # Window 1: 20 days ago to 10 days ago
-        # Window 2: Last 10 days
+        # FIX: Use .item() or .iloc[0] to avoid the FutureWarning
+        # This converts a single-element Series to a scalar safely
+        curr_p = data['Close'].iloc[-1]
+        if isinstance(curr_p, pd.Series): curr_p = curr_p.iloc[0]
+        
+        if curr_p < 5.0: return None
+
+        # Pattern Logic: 10-day windows
         w1 = data.iloc[-20:-10]
         w2 = data.iloc[-10:]
         
-        # Pattern: Higher High (HH) and Higher Low (HL)
-        if (w2['High'].max() > w1['High'].max()) and (w2['Low'].min() > w1['Low'].min()):
+        # Extract max/min as scalars
+        w1_high = w1['High'].max()
+        w2_high = w2['High'].max()
+        w1_low = w1['Low'].min()
+        w2_low = w2['Low'].min()
+        
+        # Higher High and Higher Low detection
+        if (w2_high > w1_high) and (w2_low > w1_low):
+            price_20d_ago = data['Close'].iloc[-20]
+            if isinstance(price_20d_ago, pd.Series): price_20d_ago = price_20d_ago.iloc[0]
             
-            # Momentum Slope: Rate of change over last 20 days
-            slope = (curr_p - float(data['Close'].iloc[-20])) / 20
+            slope = (curr_p - price_20d_ago) / 20
             
-            # Relative Volume (RVOL)
             vol_recent = data['Volume'].tail(10).mean()
             vol_avg = data['Volume'].iloc[-30:-10].mean()
+            
+            # Ensure we are comparing scalars
+            if isinstance(vol_recent, pd.Series): vol_recent = vol_recent.iloc[0]
+            if isinstance(vol_avg, pd.Series): vol_avg = vol_avg.iloc[0]
+            
             rvol = vol_recent / vol_avg if vol_avg > 0 else 0
 
-            if rvol > 1.2:
+            if rvol > 1.0:
                 return {
                     "Ticker": ticker,
-                    "Price": round(curr_p, 2),
-                    "Slope": round(slope, 4),
-                    "RVOL": round(rvol, 2)
+                    "Price": round(float(curr_p), 2),
+                    "Slope": round(float(slope), 4),
+                    "RVOL": round(float(rvol), 2)
                 }
-    except:
+    except Exception:
         pass
     return None
 
 def scan():
     universe = get_total_market()
-    print(f"🕵️ Scanning TOTAL MARKET ({len(universe)} tickers)...")
+    print(f"🕵️ Scanning {len(universe)} tickers...")
     
-    # max_workers=10 is the "sweet spot" for speed vs stability
+    # Process in parallel
     with ThreadPoolExecutor(max_workers=10) as executor:
         results = list(executor.map(process_ticker, universe))
     
     winners = [r for r in results if r is not None]
     
+    # Always save something to prevent EmptyDataError in App
+    if not winners:
+        winners = [{"Ticker": "MARKET_FLAT", "Price": 0, "Slope": 0, "RVOL": 0}]
+    
     df = pd.DataFrame(winners)
-    if not df.empty:
-        df = df.sort_values(by="Slope", ascending=False)
-        
+    df = df.sort_values(by="Slope", ascending=False)
     df.to_csv("daily_watchlist.csv", index=False)
-    print(f"✅ Found {len(winners)} stocks in a Staircase Trend.")
+    print(f"✅ Saved {len(winners)} stocks.")
 
 if __name__ == "__main__":
     scan()
