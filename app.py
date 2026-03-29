@@ -30,8 +30,11 @@ if st.button("Run Strategy Check"):
         lows = recent['Low']
         
         # Split the 20 days into two 10-day halves to find 2 distinct steps
-        h1, l1 = highs.iloc[0:10].max(), lows.iloc[0:10].min()
-        h2, l2 = highs.iloc[10:20].max(), lows.iloc[10:20].min()
+        # We force these to be single numbers (floats) using .item() or .max()
+h1 = float(highs.iloc[0:10].max())
+l1 = float(lows.iloc[0:10].min())
+h2 = float(highs.iloc[10:20].max())
+l2 = float(lows.iloc[10:20].min())
         
         is_staircase = (h2 > h1) and (l2 > l1)
 
