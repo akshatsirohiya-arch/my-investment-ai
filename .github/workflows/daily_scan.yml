@@ -2,12 +2,12 @@ name: Daily Market Close Scan
 
 on:
   schedule:
-    # Runs at 4:30 PM EST (21:30 UTC) Monday-Friday
+    # Runs Monday-Friday at 21:30 UTC (4:30 PM EST)
     - cron: '30 21 * * 1-5'
-  workflow_dispatch: # Manual trigger button
+  workflow_dispatch: # Allows you to run it manually via the "Actions" tab
 
 env:
-  # Forces actions to run on Node 24 to clear deprecation warnings
+  # Ensures the runner uses the most modern Node environment for 2026
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
@@ -21,21 +21,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0 # Essential for git pull/rebase to work
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
+          python-version: '3.11'
           cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance pandas requests
+          # curl_cffi is REQUIRED for yfinance to bypass 401 errors in 2026
+          pip install --upgrade yfinance pandas requests curl_cffi
 
-      - name: Run Total Market Scanner
-        # This executes the math for 6,000+ tickers
+      - name: Run 180-Day Breakout Scanner
+        # This will now use the stealth TLS fingerprinting
         run: python scanner.py
 
       - name: Sync and Push Results
@@ -43,20 +44,15 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # FIX FOR ERROR 128:
-          # 1. Stage the new CSV data
+          # Stage the changes
           git add daily_watchlist.csv
           
-          # 2. Temporarily hide the changes so we can pull the latest code
+          # Handle potential sync conflicts from the web editor
           git stash
-          
-          # 3. Pull any updates from the web editor or previous runs
           git pull --rebase origin main
+          git stash pop || echo "No local changes to merge"
           
-          # 4. Bring the new CSV data back
-          git stash pop || echo "No changes to merge"
-          
-          # 5. Final commit and push
+          # Final commit and push
           git add daily_watchlist.csv
-          git commit -m "Update Total Market Watchlist [skip ci]" || exit 0
+          git commit -m "Update 180-Day Breakout Watchlist [skip ci]" || exit 0
           git push origin main
