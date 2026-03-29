@@ -3,77 +3,80 @@ import pandas as pd
 import time
 import requests
 
-def scan():
-    # 1. Get Tickers (Keep it to a manageable 500 for high quality)
+def get_full_universe():
+    # Fetches ~6,000+ US Tickers
     url = "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/all/all_tickers.txt"
-    all_tickers = requests.get(url).text.splitlines()
-    universe = [t.strip() for t in all_tickers if t.strip()][:500] 
-    
+    try:
+        r = requests.get(url, timeout=10)
+        return [t.strip().upper() for t in r.text.splitlines() if t.strip()]
+    except:
+        return ["AAPL", "TSLA", "NVDA", "AMD", "PLTR"] # Fallback
+
+def scan():
+    universe = get_full_universe()
     winners = []
     
-    # Use a persistent session to look 'human'
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+    # 1. Batching Logic: Process 50 stocks at a time
+    batch_size = 50 
+    print(f"🌪️ Starting FULL MARKET scan of {len(universe)} tickers...")
 
-    print(f"🚀 Starting Deep Scan of {len(universe)} tickers...")
-
-    for ticker in universe:
+    for i in range(0, len(universe), batch_size):
+        batch = universe[i:i + batch_size]
+        print(f"Scanning batch {i//batch_size + 1}: {batch[0]} to {batch[-1]}")
+        
         try:
-            # FAST CHECK: Use history(period='1d') to get price/cap without calling .info
-            # This is 10x faster and less likely to get you banned
-            t = yf.Ticker(ticker, session=session)
+            # Vectorized Download: Gets 60 days of data for 50 stocks at once!
+            data = yf.download(batch, period="60d", group_by='ticker', threads=True, progress=False)
             
-            # Get 60 days of data in ONE shot
-            df = t.history(period="60d")
+            for ticker in batch:
+                try:
+                    df = data[ticker]
+                    if df.empty or len(df) < 40: continue
+
+                    # Basic Price/Vol Filters
+                    curr_p = df['Close'].iloc[-1]
+                    if curr_p < 5.0: continue
+
+                    # STAIRCASE LOGIC (Higher Highs & Higher Lows)
+                    w1 = df.iloc[-20:-10] # Prev 10 days
+                    w2 = df.iloc[-10:]    # Last 10 days
+                    
+                    hh = w2['High'].max() > w1['High'].max()
+                    hl = w2['Low'].min() > w1['Low'].min()
+
+                    if hh and hl:
+                        # MOMENTUM SLOPE (The Gain Potential)
+                        slope = (df['Close'].iloc[-1] - df['Close'].iloc[-20]) / 20
+                        
+                        # VOLUME SURGE
+                        rvol = df['Volume'].tail(10).mean() / df['Volume'].iloc[-30:-10].mean()
+                        
+                        if rvol > 1.2:
+                            winners.append({
+                                "Ticker": ticker,
+                                "Price": round(curr_p, 2),
+                                "Slope": round(slope, 4),
+                                "RVOL": round(rvol, 2)
+                            })
+                except:
+                    continue
             
-            if df.empty or len(df) < 40:
-                continue
-
-            # PRE-FILTER: Only proceed if price > $5 (Prevents wasting time on junk)
-            current_price = df['Close'].iloc[-1]
-            if current_price < 5:
-                continue
-
-            # STAIRCASE LOGIC: Higher Highs & Higher Lows
-            w1 = df.iloc[-20:-10] # Previous 10 days
-            w2 = df.iloc[-10:]    # Last 10 days
-            
-            if (w2['High'].max() > w1['High'].max()) and (w2['Low'].min() > w1['Low'].min()):
-                # CALCULATE MOMENTUM SLOPE
-                slope = (df['Close'].iloc[-1] - df['Close'].iloc[-20]) / 20
-                
-                # VOLUME SURGE
-                rvol = df['Volume'].tail(10).mean() / df['Volume'].iloc[-30:-10].mean()
-                
-                if rvol > 1.2:
-                    # ONLY call .info for winners to save your rate limit!
-                    info = t.info
-                    winners.append({
-                        "Ticker": ticker,
-                        "Price": round(current_price, 2),
-                        "Slope": round(slope, 4),
-                        "RVOL": round(rvol, 2),
-                        "Sector": info.get('sector', 'Unknown'),
-                        "Cap_M": round(info.get('marketCap', 0) / 1_000_000, 0)
-                    })
-                    print(f"✅ Match: {ticker} (Slope: {slope:.2f})")
-
-            # SMART DELAY: Randomize slightly to avoid bot detection
-            time.sleep(0.5) 
+            # Tiny rest so we don't get blocked
+            time.sleep(2) 
 
         except Exception as e:
-            # If we get a rate limit error, wait longer
-            if "429" in str(e):
-                print("🛑 Rate limited. Sleeping for 30 seconds...")
-                time.sleep(30)
+            print(f"Batch failed: {e}")
+            time.sleep(10)
             continue
 
-    # Final Save
+    # Final Save & Sort
     out_df = pd.DataFrame(winners)
     if not out_df.empty:
+        # Sort by the "Gain Potential" Slope
         out_df = out_df.sort_values(by="Slope", ascending=False)
+        
     out_df.to_csv("daily_watchlist.csv", index=False)
-    print(f"🏁 Done. Found {len(winners)} trending stocks.")
+    print(f"🏁 MISSION COMPLETE. Found {len(winners)} Staircase Patterns.")
 
 if __name__ == "__main__":
     scan()
