@@ -3,103 +3,158 @@ import yfinance as yf
 import pandas as pd
 import time
 import requests
+from openai import OpenAI
 
-# --- 1. THE UNIVERSE (Entire US Market) ---
+# --- 1. PAGE CONFIG & AI SETUP ---
+st.set_page_config(layout="wide", page_title="Total Market Footprint Scanner")
+
+# Initialize AI if Key is in Secrets
+try:
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except Exception:
+    st.sidebar.warning("⚠️ AI Analysis Disabled (No API Key found in Secrets)")
+
+# --- 2. DATA UTILITIES ---
 @st.cache_data(ttl=86400)
-def get_entire_us_universe():
-    """Fetches a comprehensive list of all US-listed tickers."""
+def get_total_us_universe():
+    """Fetches every ticker currently listed on NASDAQ, NYSE, and AMEX."""
     try:
-        # Using a reliable public source for NASDAQ/NYSE/AMEX tickers
-        url = "https://pkgstore.datahub.io/core/nyse-other-listings/nyse-listed_csv/data/3c8b905153027da548f1840003b0286c/nyse-listed_csv.csv"
-        nyse = pd.read_csv(url)['ACT Symbol'].tolist()
-        
-        url_other = "https://pkgstore.datahub.io/core/nyse-other-listings/other-listed_csv/data/9f3a267b14619f74e62e3914856f6b1e/other-listed_csv.csv"
-        others = pd.read_csv(url_other)['NASDAQ Symbol'].tolist()
-        
-        return list(set(nyse + others))
-    except:
-        # Fallback to a smaller sample if the external source is down
-        return ["AAPL", "TSLA", "NVDA", "MSFT", "AMD", "PLTR", "SOFI"]
+        # Fetching a comprehensive list of US tickers
+        url = "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/all/all_tickers.txt"
+        response = requests.get(url)
+        tickers = [t.strip().upper() for t in response.text.splitlines() if t.strip()]
+        return tickers
+    except Exception:
+        return ["AAPL", "TSLA", "NVDA", "PLTR", "SOFI", "AMD", "META"]
 
-def analyze_stock_logic(df):
-    close, volume = df['Close'], df['Volume']
+def analyze_logic(df):
+    """Calculates the Staircase Breakout and 10-Day Max Relative Volume."""
+    close = df['Close']
+    volume = df['Volume']
     curr_p = float(close.iloc[-1])
-    high_6m = float(close.iloc[-126:-1].max())
     
-    # Staircase check
+    # Technical: 6-Month High & Staircase
+    high_6m = float(close.iloc[-126:-1].max())
     recent = df.tail(20)
     h1, l1 = float(recent['High'].iloc[0:10].max()), float(recent['Low'].iloc[0:10].min())
     h2, l2 = float(recent['High'].iloc[10:20].max()), float(recent['Low'].iloc[10:20].min())
-    is_pattern = (curr_p > high_6m) and (h2 > h1) and (l2 > l1)
     
-    # 10-Day RVOL
-    rvol_list = [ (volume.iloc[-i] / volume.iloc[-(i+21):-i].mean()) for i in range(1, 11) ]
-    return curr_p, max(rvol_list), is_pattern
+    is_breakout = curr_p > high_6m
+    is_staircase = (h2 > h1) and (l2 > l1)
+    
+    # Volume: 10-Day Max RVOL
+    rvol_list = []
+    for i in range(1, 11):
+        target_vol = volume.iloc[-i]
+        hist_avg = volume.iloc[-(i+21):-i].mean()
+        rvol_list.append(target_vol / hist_avg if hist_avg > 0 else 0)
+    
+    max_rvol = max(rvol_list)
+    days_ago = rvol_list.index(max_rvol)
+    
+    return curr_p, max_rvol, (is_breakout and is_staircase), days_ago
 
-# --- 2. SIDEBAR ---
-st.sidebar.header("🛡️ Funnel Settings")
-min_cap_m = st.sidebar.number_input("Market Cap Floor ($Millions)", value=300)
-vol_req = st.sidebar.slider("Min 'Footprint' Surge", 1.0, 5.0, 2.0)
+# --- 3. SIDEBAR (The Filters) ---
+st.sidebar.title("🛡️ Funnel Controls")
+min_cap_m = st.sidebar.number_input("Min Market Cap ($Millions)", value=300)
+vol_req = st.sidebar.slider("Min RVOL Surge (10-Day Max)", 1.0, 5.0, 2.0)
+st.sidebar.info("The scanner checks the Entire US Market. This takes time due to Yahoo Finance rate limits.")
 
-# --- 3. MAIN INTERFACE ---
-st.title("🌌 Total US Market Funnel")
-st.info(f"Scanning for breakouts across the entire US exchange. Cap Floor: ${min_cap_m}M")
+# --- 4. MAIN INTERFACE ---
+st.title("🌪️ Total US Market Institutional Funnel")
+st.write(f"Scanning for breakouts with a **${min_cap_m}M** floor and **{vol_req}x** volume surge.")
 
 if st.button("🔭 Launch Global Search"):
-    universe = get_entire_us_universe()
+    universe = get_total_us_universe()
     
-    # Statistics Dashboard
-    st.subheader("📊 Live Funnel Stats")
-    f1, f2, f3 = st.columns(3)
-    w_scanned = f1.empty()
-    w_filtered = f2.empty()
-    w_watchlist = f3.empty()
+    # Real-Time Funnel Statistics
+    st.subheader("📊 Live Funnel Statistics")
+    stat1, stat2, stat3, stat4 = st.columns(4)
+    w_total = stat1.empty()
+    w_cap = stat2.empty()
+    w_vol = stat3.empty()
+    w_match = stat4.empty()
     
-    prog = st.progress(0)
+    prog_bar = st.progress(0)
+    status_msg = st.empty()
     
     # Counters
-    c_scanned, c_small, c_matches = 0, 0, 0
-    results_area = st.container()
+    c_scanned = 0
+    c_skipped_cap = 0
+    c_skipped_vol = 0
+    c_matches = 0
+
+    results_container = st.container()
 
     for idx, ticker in enumerate(universe):
         c_scanned += 1
-        prog.progress((idx + 1) / len(universe))
-        w_scanned.metric("Total Scanned", c_scanned)
+        prog_bar.progress((idx + 1) / len(universe))
+        
+        # Update Widgets
+        w_total.metric("Total Universe", c_scanned)
+        w_cap.metric("Skipped (Low Cap)", c_skipped_cap)
+        w_vol.metric("Skipped (Low Vol)", c_skipped_vol)
+        w_match.metric("Watchlist Hits", c_matches)
         
         try:
-            # Step 1: Rapid Cap Check
             stock = yf.Ticker(ticker)
+            
+            # STAGE 1: Fast Market Cap Check
             info = stock.info
             m_cap = info.get('marketCap', 0)
             
-            if m_cap < (min_cap_m * 1_000_000):
-                c_small += 1
-                w_filtered.metric("Rejected (Small Cap)", c_small)
+            if m_cap != 0 and m_cap < (min_cap_m * 1_000_000):
+                c_skipped_cap += 1
                 continue
 
-            # Step 2: History & Pattern Scan
+            # STAGE 2: History & Pattern Scan
             df = stock.history(period="1y")
-            if df.empty or len(df) < 130: continue
+            if df.empty or len(df) < 130:
+                continue
             
-            price, rvol, match = analyze_stock_logic(df)
-            if rvol < vol_req: continue
+            price, rvol, is_match, days_ago = analyze_logic(df)
             
-            # Step 3: Display Results
+            # STAGE 3: Volume Surge Check
+            if rvol < vol_req:
+                c_skipped_vol += 1
+                continue
+            
+            # STAGE 4: Display The "Finalists"
             c_matches += 1
-            w_watchlist.metric("Watchlist Hits", c_matches)
-            
-            with results_area:
-                c1, c2, c3 = st.columns([1, 2, 1])
-                c1.metric(ticker, f"${price:.2f}", f"Cap: ${m_cap/1e6:.0f}M")
-                with c2:
-                    st.write(f"📈 **Volume Surge:** {rvol:.2f}x")
-                    if match: st.success("🎯 STAIRCASE PATTERN")
-                with c3:
-                    with st.expander("Chart"):
+            with results_container:
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col1:
+                    st.subheader(ticker)
+                    st.metric("Price", f"${price:.2f}")
+                    if m_cap > 0:
+                        st.caption(f"Cap: ${m_cap/1_000_000:.0f}M")
+                
+                with col2:
+                    spike_txt = "Today" if days_ago == 0 else f"{days_ago} days ago"
+                    st.write(f"📈 **Max RVOL (10d):** {rvol:.2f}x (Spiked {spike_txt})")
+                    
+                    if is_match:
+                        st.success("🎯 STAIRCASE CONFIRMED")
+                        # Optional AI Analysis
+                        if 'client' in globals():
+                            try:
+                                prompt = f"Analyze {ticker} at ${price}. 10-day vol spike is {rvol}x. Brief 2-sentence summary: Value or Hype?"
+                                res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
+                                st.info(f"🤖 AI Analyst: {res.choices[0].message.content}")
+                            except:
+                                pass
+                    else:
+                        st.warning("Volume present, but technical pattern still forming.")
+                
+                with col3:
+                    with st.expander("View Chart"):
                         st.line_chart(df['Close'].tail(60))
                 st.divider()
             
-            time.sleep(1.2) # Essential delay
+            # Essential delay to prevent IP Ban from Yahoo
+            time.sleep(1.1)
 
-        except:
+        except Exception:
             continue
+
+    status_msg.success(f"✅ Scan Complete. Found {c_matches} high-conviction setups.")
