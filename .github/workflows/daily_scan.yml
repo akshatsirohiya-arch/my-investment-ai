@@ -26,10 +26,13 @@ jobs:
       - name: Run Market Scanner
         run: python scanner.py
         
-      - name: Commit and Push Results
+       - name: Commit and Push Results
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add daily_watchlist.csv
-          git commit -m "Update Daily Watchlist [skip ci]" || echo "No changes to commit"
+          # This line adds a timestamp so the file always 'changes'
+          date > last_run.txt
+          git add daily_watchlist.csv last_run.txt
+          # The || exit 0 prevents the 'Failure' if nothing changed
+          git commit -m "Update Daily Watchlist" || exit 0
           git push
