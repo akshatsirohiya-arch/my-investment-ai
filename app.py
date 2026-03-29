@@ -2,119 +2,120 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import time
-from openai import OpenAI
 
-# 1. PAGE SETUP
-st.set_page_config(layout="wide", page_title="Institutional Footprint Scanner")
+# --- SETUP ---
+st.set_page_config(layout="wide", page_title="Institutional Scanner")
 
-# 2. API KEY SETUP
-try:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-except Exception:
-    st.sidebar.warning("⚠️ OpenAI Key not found in Secrets. AI Analysis will be skipped.")
-
-# 3. CORE CALCULATION ENGINE
-def analyze_with_volume_lookback(df):
+# --- CALCULATION ENGINE ---
+def analyze_stock(df):
     close = df['Close']
     volume = df['Volume']
     curr_p = float(close.iloc[-1])
     
-    # 6-Month High & Staircase
+    # Technical Pattern
     high_6m = float(close.iloc[-126:-1].max())
     recent = df.tail(20)
-    h1, l1 = float(recent['High'].iloc[0:10].max()), float(recent['Low'].iloc[0:10].min())
-    h2, l2 = float(recent['High'].iloc[10:20].max()), float(recent['Low'].iloc[10:20].min())
+    h1, h2 = float(recent['High'].iloc[0:10].max()), float(recent['High'].iloc[10:20].max())
+    l1, l2 = float(recent['Low'].iloc[0:10].min()), float(recent['Low'].iloc[10:20].min())
+    is_pattern = (curr_p > high_6m) and (h2 > h1) and (l2 > l1)
     
-    is_breakout = curr_p > high_6m
-    is_staircase = (h2 > h1) and (l2 > l1)
-    
-    # 10-Day Max RVOL
+    # 10-Day Volume Surge
     rvol_list = []
     for i in range(1, 11):
         target_vol = volume.iloc[-i]
         hist_avg = volume.iloc[-(i+21):-i].mean()
-        day_rvol = target_vol / hist_avg if hist_avg > 0 else 0
-        rvol_list.append(day_rvol)
+        rvol_list.append(target_vol / hist_avg if hist_avg > 0 else 0)
     
-    max_rvol_10d = max(rvol_list)
-    days_ago = rvol_list.index(max_rvol_10d) 
+    return curr_p, max(rvol_list), is_pattern
+
+# --- SIDEBAR ---
+st.sidebar.header("Filter Settings")
+min_cap_val = st.sidebar.number_input("Min Cap ($M)", value=300)
+min_cap = min_cap_val * 1_000_000
+vol_req = st.sidebar.slider("Min RVOL Surge", 1.0, 5.0, 1.5)
+
+# --- MAIN UI ---
+st.title("💎 Institutional Breakout Hunter")
+
+user_input = st.text_area("Paste Tickers (Comma separated)", "PLTR, SOFI, HOOD, TSLA, NVDA, AMD, CELH, RKLB, IONQ, OKLO, LUNR", height=100)
+
+if st.button("🚀 Start Scan"):
+    tickers = [t.strip().upper() for t in user_input.split(",") if t.strip()]
     
-    return curr_p, max_rvol_10d, (is_breakout and is_staircase), days_ago
-
-# 4. SIDEBAR
-st.sidebar.title("🛡️ Risk & Quality Filters")
-min_cap_m = st.sidebar.number_input("Min Market Cap ($Millions)", value=300)
-vol_threshold = st.sidebar.slider("Min 'Footprint' RVOL (10-Day Max)", 1.0, 5.0, 2.0)
-show_all_charts = st.sidebar.checkbox("Show all charts by default", value=False)
-
-# 5. MAIN INTERFACE
-st.title("🚀 The $300M+ Footprint Scanner")
-
-user_input = st.text_input("Watchlist", "PLTR, SOFI, HOOD, TSLA, NVDA, AMD, CELH")
-tickers = [t.strip().upper() for t in user_input.split(",") if t.strip()]
-
-if st.button("🔍 Run Deep Scan"):
-    # We use a placeholder so the UI stays put
-    results_area = st.container()
+    # --- NEW: STATS WIDGET AREA ---
+    st.subheader("📊 Scan Statistics")
+    stat_col1, stat_col2, stat_col3 = st.columns(3)
+    total_widget = stat_col1.empty()
+    skipped_widget = stat_col2.empty()
+    matches_widget = stat_col3.empty()
     
-    for ticker in tickers:
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Counters
+    count_scanned = 0
+    count_skipped_cap = 0
+    count_matches = 0
+
+    results_container = st.container()
+
+    for idx, ticker in enumerate(tickers):
+        # Update Progress
+        count_scanned += 1
+        progress_bar.progress((idx + 1) / len(tickers))
+        status_text.text(f"Processing {ticker}...")
+        
+        # Update Stats Widgets in Real-Time
+        total_widget.metric("Total Scanned", count_scanned)
+        skipped_widget.metric("Skipped (<$300M)", count_skipped_cap)
+        matches_widget.metric("Matches Found", count_matches)
+
         try:
             stock = yf.Ticker(ticker)
-            df = stock.history(period="1y")
+            info = stock.info
+            mkt_cap = info.get('marketCap', 0)
             
-            if df.empty or len(df) < 130:
-                continue
-            
-            # Market Cap Check
-            try:
-                info = stock.info
-                mkt_cap = info.get('marketCap', 0)
-            except:
-                mkt_cap = 0
-            
-            if mkt_cap > 0 and mkt_cap < (min_cap_m * 1_000_000):
-                continue
-
-            price, max_vol, is_match, days_ago = analyze_with_volume_lookback(df)
-            
-            if max_vol < vol_threshold:
+            # --- FILTER 1: MARKET CAP ---
+            if mkt_cap < min_cap:
+                count_skipped_cap += 1
+                skipped_widget.metric("Skipped (<$300M)", count_skipped_cap)
                 continue
                 
-            with results_area:
-                # HEADER ROW
+            df = stock.history(period="1y")
+            if df.empty: continue
+            
+            price, max_vol, is_match = analyze_stock(df)
+            
+            # --- FILTER 2: VOLUME ---
+            if max_vol < vol_req:
+                continue
+            
+            # If we reach here, it's a match!
+            count_matches += 1
+            matches_widget.metric("Matches Found", count_matches)
+
+            with results_container:
                 c1, c2, c3 = st.columns([1, 2, 1])
                 with c1:
-                    st.markdown(f"### {ticker}")
+                    st.subheader(ticker)
                     st.metric("Price", f"${price:.2f}")
+                    st.caption(f"Cap: ${mkt_cap/1_000_000:.0f}M")
                 
                 with c2:
-                    spike_text = "today" if days_ago == 0 else f"{days_ago} days ago"
-                    st.write(f"📊 **Max RVOL (10d):** {max_vol:.2f}x (Spiked {spike_text})")
+                    st.write(f"📈 **Max Volume Surge:** {max_vol:.2f}x")
                     if is_match:
-                        st.success("🎯 MATCH: STAIRCASE + BREAKOUT")
+                        st.success("🎯 STAIRCASE CONFIRMED")
                     else:
-                        st.info("High Volume detected. Pattern still forming.")
+                        st.info("High Volume detected. Pattern forming.")
                 
                 with c3:
-                    # AI logic (only if match found to save credits)
-                    if is_match and 'client' in globals():
-                        try:
-                            prompt = f"Analyze {ticker} (${price}). 10-day volume spike is {max_vol}x. Value play or risky trend? 2 sentences."
-                            ai_res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
-                            st.caption(ai_res.choices[0].message.content)
-                        except:
-                            st.caption("AI Analysis unavailable.")
-
-                # CHART AREA (Fixed the 'getting stuck' issue)
-                # If 'Show all charts' is off, we use an expander which is much more stable than a checkbox
-                if show_all_charts:
-                    st.line_chart(df['Close'].tail(60))
-                else:
-                    with st.expander(f"📈 View {ticker} Chart"):
+                    with st.expander("View Chart"):
                         st.line_chart(df['Close'].tail(60))
-                
                 st.divider()
-                time.sleep(1)
-                
-        except Exception as e:
-            st.error(f"Error scanning {ticker}")
+            
+            time.sleep(1.2)
+            
+        except Exception:
+            continue
+
+    status_text.success(f"✅ Finished! Found {count_matches} stocks out of {count_scanned} scanned.")
