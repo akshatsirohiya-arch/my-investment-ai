@@ -4,90 +4,94 @@ import pandas as pd
 import time
 from openai import OpenAI
 
-# 1. SETUP & CONFIG
-st.set_page_config(layout="wide", page_title="Staircase AI Analyst")
+# 1. SETUP
+st.set_page_config(layout="wide", page_title="Market Trend Hunter")
 
-# Pull the key automatically from your Streamlit Secrets
+# Access OpenAI Key from Secrets
 try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except:
-    st.error("OpenAI Key not found in Secrets! Please add it to your Streamlit Settings.")
+    st.sidebar.error("⚠️ OpenAI Key missing in Streamlit Secrets!")
 
-# 2. THE "BRAIN" FUNCTIONS
-@st.cache_data(ttl=3600) # Remembers data for 1 hour to stay under rate limits
+# 2. THE DISCOVERY ENGINE
+@st.cache_data(ttl=3600)
+def get_trending_tickers():
+    # This grabs the "Most Active" stocks currently on the market
+    try:
+        trending = yf.Search("", max_results=20).tickers
+        # Filter for actual stock symbols (usually 3-5 letters)
+        clean_list = [t['symbol'] for t in trending if len(t['symbol']) <= 5]
+        return clean_list
+    except:
+        return ["NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN", "GOOGL"]
+
+@st.cache_data(ttl=1200)
 def get_data(ticker):
     stock = yf.Ticker(ticker)
-    # Download 1 year of history
-    df = stock.history(period="1y")
-    # Get basic company info
-    info = stock.info
-    return df, info
+    return stock.history(period="1y"), stock.info
 
 def analyze_staircase(df):
-    """Calculates the 6-month breakout and 2-step staircase"""
     close_prices = df['Close']
     current_price = float(close_prices.iloc[-1])
-    
-    # 6-Month High (excluding today)
     six_month_high = float(close_prices.iloc[-126:-1].max())
-    is_breakout = current_price > six_month_high
     
-    # Staircase: Look at last 20 days (Split into two 10-day buckets)
     recent = df.tail(20)
     h1, l1 = float(recent['High'].iloc[0:10].max()), float(recent['Low'].iloc[0:10].min())
     h2, l2 = float(recent['High'].iloc[10:20].max()), float(recent['Low'].iloc[10:20].min())
     
-    is_staircase = (h2 > h1) and (l2 > l1)
-    return current_price, six_month_high, is_breakout, is_staircase
+    is_match = (current_price > six_month_high) and (h2 > h1) and (l2 > l1)
+    return current_price, six_month_high, is_match
 
-# 3. THE APP INTERFACE
-st.title("📈 Staircase Strategy AI")
-st.write("Professional Technical Scanner + Graham Value Analysis")
+# 3. SIDEBAR CONTROLS
+st.sidebar.title("🛠️ Discovery Tools")
+if st.sidebar.button("🔥 Load Top Trending Stocks"):
+    trending_list = get_trending_tickers()
+    st.session_state.watchlist = ", ".join(trending_list)
 
-watchlist_raw = st.text_input("Enter Tickers (separated by commas)", "NVDA, AAPL, COST, AMZN")
-tickers = [t.strip().upper() for t in watchlist_raw.split(",")]
+# 4. MAIN INTERFACE
+st.title("🎯 AI Trend Hunter")
+st.write("Scan your watchlist or load the market's most active stocks.")
 
-if st.button("Run Full Market Analysis"):
+# Manage the watchlist in "Session State" so it updates when you click the button
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = "NVDA, AAPL, MSFT"
+
+user_input = st.text_input("Current Watchlist", st.session_state.watchlist)
+tickers = [t.strip().upper() for t in user_input.split(",")]
+
+if st.button("🚀 Start Global Analysis"):
+    results_found = 0
     for ticker in tickers:
         with st.container():
             try:
-                # Get the data
                 df, info = get_data(ticker)
-                
                 if not df.empty:
-                    # Run the Math
-                    price, m6_high, breakout, staircase = analyze_staircase(df)
-                    rev_growth = info.get('revenueGrowth', 0) * 100
+                    price, m6_high, is_match = analyze_staircase(df)
                     
-                    # --- COMPACT ROW DESIGN ---
                     col1, col2, col3 = st.columns([1, 2, 1])
                     
                     with col1:
                         st.subheader(ticker)
-                        st.write(f"Current: **${price:.2f}**")
-                        st.write(f"6M High: ${m6_high:.2f}")
+                        st.write(f"Price: **${price:.2f}**")
                     
                     with col2:
-                        if breakout and staircase:
-                            st.success("✅ STRATEGY MATCH")
-                            # AI Analysis
-                            prompt = f"Analyze {ticker} (${price}). It's in a technical breakout. In 2 sentences: Is this a 'Value' play per Benjamin Graham, and what is the main risk?"
+                        if is_match:
+                            results_found += 1
+                            st.success("🎯 STRATEGY MATCH")
+                            prompt = f"Analyze {ticker} at ${price}. Is this a high-quality trend or a bubble? 2 sentences."
                             response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
                             st.info(response.choices[0].message.content)
-                        elif breakout:
-                            st.warning("⚠️ Breakout only (No staircase yet)")
                         else:
-                            st.write("❌ No pattern detected.")
+                            st.write("Pattern: *Waiting for breakout...*")
                     
                     with col3:
-                        # Checkbox to show/hide the chart
-                        if st.checkbox("View Chart", key=f"btn_{ticker}"):
+                        if st.checkbox("Show Chart", key=f"c_{ticker}"):
                             st.line_chart(df['Close'].tail(60))
                     
                     st.divider()
-                
-                # Small delay to prevent Yahoo from getting angry
-                time.sleep(1.5)
-                
-            except Exception as e:
-                st.error(f"Could not load {ticker}. Error: {e}")
+                time.sleep(1)
+            except:
+                continue
+    
+    if results_found == 0:
+        st.info("No perfect matches found in this list. Try the 'Trending' button!")
