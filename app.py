@@ -1,35 +1,58 @@
 import streamlit as st
 import pandas as pd
+import os
+import yfinance as yf
 
-st.set_page_config(layout="wide", page_title="Momentum Funnel")
+st.set_page_config(layout="wide", page_title="Total Market Momentum")
 
-st.title("🏹 The Momentum Funnel")
-st.subheader("Elite 'Staircase' Patterns Sorted by Trend Velocity")
+st.title("🏹 Elite Momentum Funnel")
+st.subheader("Total Market Staircase Patterns")
 
-try:
-    df = pd.read_csv("daily_watchlist.csv")
+# --- DATA LOADING ---
+if not os.path.exists("daily_watchlist.csv"):
+    st.error("No data found. Please run the GitHub Action scanner.")
+    st.stop()
+
+df = pd.read_csv("daily_watchlist.csv")
+
+# --- ENHANCEMENT: Fetch Industry for winners ---
+@st.cache_data(ttl=3600)
+def get_extra_info(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        return info.get('industry', 'N/A'), info.get('sector', 'N/A')
+    except:
+        return 'N/A', 'N/A'
+
+if not df.empty:
+    # Sort by Momentum Slope
+    df = df.sort_values(by="Slope", ascending=False).head(50) # Top 50 for performance
     
-    # 1. Sector Distribution Sidebar
-    if 'Sector' in df.columns:
-        selected_sector = st.sidebar.multiselect("Filter by Sector", options=df['Sector'].unique())
-        if selected_sector:
-            df = df[df['Sector'].isin(selected_sector)]
+    # Add Industry & Chart Links
+    if 'Industry' not in df.columns:
+        with st.spinner("Fetching Industry and Chart data..."):
+            df[['Industry', 'Sector']] = df['Ticker'].apply(lambda x: pd.Series(get_extra_info(x)))
+    
+    # Create a clickable TradingView Link
+    df['Chart'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
 
-    # 2. Main Table
+    # --- DISPLAY TABLE ---
     st.dataframe(
         df,
         use_container_width=True,
         column_config={
-            "Slope": st.column_config.ProgressColumn("Momentum Score", min_value=0, max_value=float(df['Slope'].max()) if not df.empty else 1),
+            "Ticker": st.column_config.TextColumn("Ticker"),
+            "Chart": st.column_config.LinkColumn("View Chart", display_text="Open Chart 📈"),
+            "Slope": st.column_config.NumberColumn("Momentum Score", format="%.4f"),
             "RVOL": st.column_config.NumberColumn("Vol Surge", format="%.1fx"),
-            "Cap_M": st.column_config.NumberColumn("Cap ($M)", format="$%d")
+            "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
         }
     )
-    
-    # 3. Top Pick Analysis
-    if not df.empty:
-        top = df.iloc[0]
-        st.info(f"💡 **Top Pick Analysis:** {top['Ticker']} is leading the market with a slope of {top['Slope']}. It operates in the **{top['Industry']}** industry.")
 
-except FileNotFoundError:
-    st.warning("Daily scan in progress. Check back shortly.")
+    # --- TOP PICK ANALYSIS ---
+    top = df.iloc[0]
+    st.success(f"🏆 **Top Pick:** {top['Ticker']} in **{top['Industry']}**")
+    st.write(f"This stock has the highest 'Staircase Slope' today. [Click here to see the chart]({top['Chart']})")
+
+else:
+    st.info("No stocks currently meet the staircase criteria.")
