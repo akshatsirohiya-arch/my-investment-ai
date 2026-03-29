@@ -1,7 +1,7 @@
 name: Daily Market Close Scan
 on:
   schedule:
-    - cron: '30 20 * * 1-5' # 4:30 PM EST
+    - cron: '30 20 * * 1-5'
   workflow_dispatch: 
 
 env:
@@ -12,29 +12,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Essential for rebase
-        
-      - name: Set up Python
-        uses: actions/setup-python@v5
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          
-      - name: Install dependencies
-        run: pip install yfinance pandas requests
-        
-      - name: Run Market Scanner
-        run: python scanner.py
-        
-      - name: Commit and Push Results
+      - run: pip install yfinance pandas requests
+      - run: python scanner.py
+      - name: Sync and Push
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git pull --rebase origin main
           git add daily_watchlist.csv
-          git commit -m "Update Daily Watchlist [skip ci]" || exit 0
+          git commit -m "Update Elite Watchlist [skip ci]" || exit 0
           git push origin main
