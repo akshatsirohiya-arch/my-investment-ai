@@ -2,19 +2,18 @@ name: Daily Market Close Scan
 
 on:
   schedule:
-    # Runs at 21:30 UTC (4:30 PM EST) Monday - Friday
+    # Runs at 4:30 PM EST (21:30 UTC) Monday-Friday
     - cron: '30 21 * * 1-5'
-  workflow_dispatch: # Allows you to trigger it manually from the Actions tab
+  workflow_dispatch: # Manual trigger button
 
-# This ensures all actions use the modern Node 24 engine
 env:
+  # Forces actions to run on Node 24 to clear deprecation warnings
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     
-    # Critical for saving the daily_watchlist.csv back to your repo
     permissions:
       contents: write
 
@@ -22,22 +21,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0 # Fetches all history so 'git pull' works correctly
+          fetch-depth: 0 # Essential for git pull/rebase to work
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.10'
-          cache: 'pip' # Speeds up subsequent runs
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install yfinance pandas requests
 
-      - name: Run Market Scanner
-        # If this fails in 24 seconds, check the 'Run Market Scanner' logs 
-        # for "429 Too Many Requests" from Yahoo.
+      - name: Run Total Market Scanner
+        # This executes the math for 6,000+ tickers
         run: python scanner.py
 
       - name: Sync and Push Results
@@ -45,14 +43,20 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # 1. Pull latest changes to avoid the "rejected" error
-          git pull --rebase origin main
-          
-          # 2. Add the results file
+          # FIX FOR ERROR 128:
+          # 1. Stage the new CSV data
           git add daily_watchlist.csv
           
-          # 3. Commit only if changes exist; '[skip ci]' prevents infinite loops
-          git commit -m "Update Daily Watchlist [skip ci]" || echo "No changes to save"
+          # 2. Temporarily hide the changes so we can pull the latest code
+          git stash
           
-          # 4. Push back to the main branch
+          # 3. Pull any updates from the web editor or previous runs
+          git pull --rebase origin main
+          
+          # 4. Bring the new CSV data back
+          git stash pop || echo "No changes to merge"
+          
+          # 5. Final commit and push
+          git add daily_watchlist.csv
+          git commit -m "Update Total Market Watchlist [skip ci]" || exit 0
           git push origin main
