@@ -2,72 +2,81 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import time
+from openai import OpenAI
 
-st.set_page_config(layout="wide", page_title="AI Batch Scanner")
+st.set_page_config(layout="wide", page_title="AI Research Assistant")
 
-st.title("🔍 Multi-Stock Strategy Scanner")
-st.write("Enter multiple tickers separated by commas (e.g., NVDA, AAPL, MSFT, COST, TSLA)")
+# --- SIDEBAR: KEY INPUT ---
+st.sidebar.title("Configuration")
+api_key = st.sidebar.text_input("Enter OpenAI API Key", type="password")
 
-# 1. Input for a list of stocks
-user_input = st.text_input("Your Watchlist", "NVDA, AAPL, MSFT, COST, TSLA, AMZN, GOOGL")
+st.title("🤖 AI-Powered Investment Researcher")
+st.write("Scanning for Breakouts and Consulting the 'Intelligent Investor' AI.")
+
+user_input = st.text_input("Your Watchlist", "NVDA, AAPL, MSFT, COST, TSLA")
 ticker_list = [t.strip().upper() for t in user_input.split(",")]
 
-if st.button("Start Global Scan"):
-    results = []
-    progress_bar = st.progress(0)
+# --- AI FUNCTION ---
+def ask_ai(ticker, price, growth):
+    if not api_key:
+        return "Please enter your API Key in the sidebar to see AI Analysis."
     
-    for index, ticker in enumerate(ticker_list):
-        # Update progress bar
-        progress_bar.progress((index + 1) / len(ticker_list))
-        st.write(f"Analyzing {ticker}...")
-        
-        try:
-            stock = yf.Ticker(ticker)
-            data = stock.history(period="1y")
-            
-            if not data.empty:
-                close_prices = data['Close']
+    client = OpenAI(api_key=api_key)
+    
+    instructions = f"""
+    You are a professional investment analyst familiar with 'The Intelligent Investor' (Benjamin Graham) 
+    and 'The Art and Science of Investing'. 
+    
+    The stock {ticker} is currently priced at ${price} and has a revenue growth of {growth}%. 
+    It just hit a 6-month breakout with a 'Staircase' pattern (2 higher highs/lows).
+    
+    In 3 short sentences:
+    1. Is this a 'Defensive' or 'Enterprising' investment according to Graham?
+    2. What is the biggest risk for this specific company right now?
+    3. Final verdict: Invest or Wait?
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": instructions}]
+    )
+    return response.choices[0].message.content
+
+# --- THE SCANNER ---
+if st.button("Start AI Research"):
+    for ticker in ticker_list:
+        with st.expander(f"Analyzing {ticker}...", expanded=True):
+            try:
+                stock = yf.Ticker(ticker)
+                data = stock.history(period="1y")
                 
-                # --- TECHNICAL LOGIC ---
-                six_month_high = float(close_prices.iloc[-126:-1].max())
-                current_price = float(close_prices.iloc[-1])
-                is_breakout = current_price > six_month_high
+                if not data.empty:
+                    # 1. Technical Math
+                    close_prices = data['Close']
+                    six_month_high = float(close_prices.iloc[-126:-1].max())
+                    current_price = float(close_prices.iloc[-1])
+                    
+                    recent = data.tail(20)
+                    h1, l1 = float(recent['High'].iloc[0:10].max()), float(recent['Low'].iloc[0:10].min())
+                    h2, l2 = float(recent['High'].iloc[10:20].max()), float(recent['Low'].iloc[10:20].min())
+                    
+                    is_match = (current_price > six_month_high) and (h2 > h1) and (l2 > l1)
+                    
+                    # 2. Fundamental Pull
+                    rev_growth = stock.info.get('revenueGrowth', 0) * 100
+
+                    # 3. Display Status
+                    if is_match:
+                        st.success(f"✅ {ticker} fits your Staircase Strategy!")
+                        # Trigger the AI Brain
+                        st.write("--- AI ANALYST REPORT ---")
+                        report = ask_ai(ticker, current_price, rev_growth)
+                        st.info(report)
+                    else:
+                        st.warning(f"❌ {ticker} does not meet all criteria yet.")
+                    
+                    st.line_chart(close_prices.tail(100))
                 
-                recent = data.tail(20)
-                h1, l1 = float(recent['High'].iloc[0:10].max()), float(recent['Low'].iloc[0:10].min())
-                h2, l2 = float(recent['High'].iloc[10:20].max()), float(recent['Low'].iloc[10:20].min())
-                is_staircase = (h2 > h1) and (l2 > l1)
-
-                # --- SCORE ---
-                status = "❌ No Match"
-                if is_breakout and is_staircase:
-                    status = "✅ STRATEGY MATCH"
-                elif is_breakout:
-                    status = "⚠️ Breakout Only"
-
-                results.append({
-                    "Ticker": ticker,
-                    "Price": round(current_price, 2),
-                    "6M High": round(six_month_high, 2),
-                    "Status": status
-                })
-            
-            # SMALL PAUSE: This helps prevent the "Rate Limit" error
-            time.sleep(1) 
-            
-        except Exception as e:
-            st.warning(f"Skipping {ticker} due to data error.")
-
-    # 2. Display the Final Table
-    if results:
-        df = pd.DataFrame(results)
-        st.divider()
-        st.subheader("📊 Scan Results")
-        
-        # Highlight the matches
-        st.dataframe(df.style.applymap(
-            lambda x: 'background-color: #d4edda' if x == "✅ STRATEGY MATCH" else '', 
-            subset=['Status']
-        ))
-    else:
-        st.error("No results found.")
+                time.sleep(1) # Be nice to Yahoo
+            except Exception as e:
+                st.error(f"Error checking {ticker}: {e}")
