@@ -1,16 +1,19 @@
 name: Daily Market Close Scan
 on:
   schedule:
-    - cron: '30 21 * * 1-5' # Runs at 4:30 PM EST (9:30 PM UTC) Mon-Fri
-  workflow_dispatch: # Allows you to press a button to run it manually
+    - cron: '30 20 * * 1-5' # 4:30 PM EST
+  workflow_dispatch: 
 
-# This fix prevents the Node.js 20 deprecation failure
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # This block tells GitHub exactly what the runner is allowed to do
+    permissions:
+      contents: write
+      
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,13 +29,13 @@ jobs:
       - name: Run Market Scanner
         run: python scanner.py
         
-       - name: Commit and Push Results
+      - name: Commit and Push Results
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          # This line adds a timestamp so the file always 'changes'
-          date > last_run.txt
-          git add daily_watchlist.csv last_run.txt
-          # The || exit 0 prevents the 'Failure' if nothing changed
-          git commit -m "Update Daily Watchlist" || exit 0
+          # Ensure the file exists even if no stocks are found
+          touch daily_watchlist.csv
+          git add daily_watchlist.csv
+          # The '|| exit 0' prevents failure if there are no new changes
+          git commit -m "Update Daily Watchlist [skip ci]" || exit 0
           git push
