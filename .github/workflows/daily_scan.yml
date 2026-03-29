@@ -1,31 +1,58 @@
 name: Daily Market Close Scan
+
 on:
   schedule:
-    - cron: '30 20 * * 1-5'
-  workflow_dispatch: 
+    # Runs at 21:30 UTC (4:30 PM EST) Monday - Friday
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch: # Allows you to trigger it manually from the Actions tab
 
+# This ensures all actions use the modern Node 24 engine
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # Critical for saving the daily_watchlist.csv back to your repo
     permissions:
       contents: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
+          fetch-depth: 0 # Fetches all history so 'git pull' works correctly
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
-      - run: pip install yfinance pandas requests
-      - run: python scanner.py
-      - name: Sync and Push
+          cache: 'pip' # Speeds up subsequent runs
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas requests
+
+      - name: Run Market Scanner
+        # If this fails in 24 seconds, check the 'Run Market Scanner' logs 
+        # for "429 Too Many Requests" from Yahoo.
+        run: python scanner.py
+
+      - name: Sync and Push Results
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          # 1. Pull latest changes to avoid the "rejected" error
           git pull --rebase origin main
+          
+          # 2. Add the results file
           git add daily_watchlist.csv
-          git commit -m "Update Elite Watchlist [skip ci]" || exit 0
+          
+          # 3. Commit only if changes exist; '[skip ci]' prevents infinite loops
+          git commit -m "Update Daily Watchlist [skip ci]" || echo "No changes to save"
+          
+          # 4. Push back to the main branch
           git push origin main
