@@ -3,68 +3,77 @@ import pandas as pd
 import time
 import requests
 
-def calculate_slope(series):
-    if len(series) < 20: return 0
-    # Linear trend: (Current - Start) / Time
-    return (series.iloc[-1] - series.iloc[0]) / 20
-
 def scan():
+    # 1. Get Tickers (Keep it to a manageable 500 for high quality)
     url = "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/all/all_tickers.txt"
-    universe = requests.get(url).text.splitlines()
+    all_tickers = requests.get(url).text.splitlines()
+    universe = [t.strip() for t in all_tickers if t.strip()][:500] 
+    
     winners = []
     
+    # Use a persistent session to look 'human'
     session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0'})
+    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
-    print(f"🚀 Scanning for Staircase Patterns in {len(universe)} stocks...")
+    print(f"🚀 Starting Deep Scan of {len(universe)} tickers...")
 
-    for ticker in universe[:1500]: # Start with a smaller batch to test speed
+    for ticker in universe:
         try:
-            t = yf.Ticker(ticker.strip(), session=session)
+            # FAST CHECK: Use history(period='1d') to get price/cap without calling .info
+            # This is 10x faster and less likely to get you banned
+            t = yf.Ticker(ticker, session=session)
             
-            # 1. Quick Fundamentals Filter
-            info = t.info
-            m_cap = info.get('marketCap', 0)
-            if m_cap < 300_000_000: continue
-            
-            # 2. Get 60 days of history for pattern recognition
+            # Get 60 days of data in ONE shot
             df = t.history(period="60d")
-            if len(df) < 40: continue
             
-            # 3. Staircase Logic: Higher High (HH) & Higher Low (HL)
-            # Compare current 10-day window to previous 10-day window
-            w1 = df.iloc[-20:-10]
-            w2 = df.iloc[-10:]
+            if df.empty or len(df) < 40:
+                continue
+
+            # PRE-FILTER: Only proceed if price > $5 (Prevents wasting time on junk)
+            current_price = df['Close'].iloc[-1]
+            if current_price < 5:
+                continue
+
+            # STAIRCASE LOGIC: Higher Highs & Higher Lows
+            w1 = df.iloc[-20:-10] # Previous 10 days
+            w2 = df.iloc[-10:]    # Last 10 days
             
-            is_staircase = (w2['High'].max() > w1['High'].max()) and (w2['Low'].min() > w1['Low'].min())
-            
-            if is_staircase:
-                close = df['Close']
-                vol = df['Volume']
-                rvol = vol.tail(10).mean() / vol.iloc[-30:-10].mean()
+            if (w2['High'].max() > w1['High'].max()) and (w2['Low'].min() > w1['Low'].min()):
+                # CALCULATE MOMENTUM SLOPE
+                slope = (df['Close'].iloc[-1] - df['Close'].iloc[-20]) / 20
                 
-                if rvol > 1.5:
-                    slope = calculate_slope(close.tail(20))
+                # VOLUME SURGE
+                rvol = df['Volume'].tail(10).mean() / df['Volume'].iloc[-30:-10].mean()
+                
+                if rvol > 1.2:
+                    # ONLY call .info for winners to save your rate limit!
+                    info = t.info
                     winners.append({
                         "Ticker": ticker,
-                        "Price": round(close.iloc[-1], 2),
+                        "Price": round(current_price, 2),
                         "Slope": round(slope, 4),
                         "RVOL": round(rvol, 2),
-                        "Sector": info.get('sector', 'N/A'),
-                        "Industry": info.get('industry', 'N/A'),
-                        "Cap_M": round(m_cap / 1_000_000, 0)
+                        "Sector": info.get('sector', 'Unknown'),
+                        "Cap_M": round(info.get('marketCap', 0) / 1_000_000, 0)
                     })
-                    print(f"🎯 Staircase Found: {ticker} (Slope: {slope})")
-            
-            time.sleep(0.2)
-        except Exception:
+                    print(f"✅ Match: {ticker} (Slope: {slope:.2f})")
+
+            # SMART DELAY: Randomize slightly to avoid bot detection
+            time.sleep(0.5) 
+
+        except Exception as e:
+            # If we get a rate limit error, wait longer
+            if "429" in str(e):
+                print("🛑 Rate limited. Sleeping for 30 seconds...")
+                time.sleep(30)
             continue
 
-    # Save and sort by Slope (Momentum)
-    out = pd.DataFrame(winners)
-    if not out.empty:
-        out = out.sort_values(by="Slope", ascending=False)
-    out.to_csv("daily_watchlist.csv", index=False)
+    # Final Save
+    out_df = pd.DataFrame(winners)
+    if not out_df.empty:
+        out_df = out_df.sort_values(by="Slope", ascending=False)
+    out_df.to_csv("daily_watchlist.csv", index=False)
+    print(f"🏁 Done. Found {len(winners)} trending stocks.")
 
 if __name__ == "__main__":
     scan()
