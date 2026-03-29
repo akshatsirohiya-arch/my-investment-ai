@@ -10,13 +10,14 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # This block tells GitHub exactly what the runner is allowed to do
     permissions:
       contents: write
       
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Essential for rebase
         
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,9 +34,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          # Ensure the file exists even if no stocks are found
-          touch daily_watchlist.csv
+          git pull --rebase origin main
           git add daily_watchlist.csv
-          # The '|| exit 0' prevents failure if there are no new changes
           git commit -m "Update Daily Watchlist [skip ci]" || exit 0
-          git push
+          git push origin main
