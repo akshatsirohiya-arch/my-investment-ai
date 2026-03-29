@@ -5,48 +5,49 @@ import pandas as pd
 st.title("Staircase Strategy Scanner")
 st.write("Searching for 6-Month Breakouts with 2 Higher Highs/Lows")
 
-# 1. Choose a stock to test
 ticker_symbol = st.text_input("Enter Ticker (e.g., NVDA, AAPL, MSFT)", "NVDA")
 
 if st.button("Run Strategy Check"):
-    # 2. Download 1 year of price data
+    # 1. Download data
     data = yf.download(ticker_symbol, period="1y", interval="1d")
     
     if not data.empty:
         # Get the closing prices
-        prices = data['Close']
+        close_prices = data['Close']
         
-        # 3. Check for 6-Month Breakout
-        # (Look at the high of the last 126 trading days)
-        six_month_high = prices.iloc[-126:-1].max()
-        current_price = prices.iloc[-1]
+        # --- FIX 1: Breakout Logic ---
+        # We look at the high of the previous 6 months (126 days)
+        # We use .max().item() to make sure it's just ONE number
+        six_month_high = float(close_prices.iloc[-126:-1].max())
+        current_price = float(close_prices.iloc[-1])
         
         is_breakout = current_price > six_month_high
         
-        # 4. Check for the "Staircase" (Higher Highs/Lows)
-        # We look at the last 20 days for this pattern
+        # --- FIX 2: Staircase Logic ---
         recent = data.tail(20)
-        highs = recent['High']
-        lows = recent['Low']
         
-        # Split the 20 days into two 10-day halves to find 2 distinct steps
-        # We force these to be single numbers (floats) using .item() or .max()
-        h1 = float(highs.iloc[0:10].max())
-        l1 = float(lows.iloc[0:10].min())
-        h2 = float(highs.iloc[10:20].max())
-        l2 = float(lows.iloc[10:20].min())
+        # Find the High and Low for the first 10 days
+        h1 = float(recent['High'].iloc[0:10].max())
+        l1 = float(recent['Low'].iloc[0:10].min())
         
+        # Find the High and Low for the last 10 days
+        h2 = float(recent['High'].iloc[10:20].max())
+        l2 = float(recent['Low'].iloc[10:20].min())
+        
+        # Now compare single numbers
         is_staircase = (h2 > h1) and (l2 > l1)
 
-        # 5. Show Results
+        # --- RESULTS ---
         st.subheader(f"Analysis for {ticker_symbol}")
         
+        # Now this 'if' statement will work because both sides are single True/False
         if is_breakout and is_staircase:
             st.success("✅ MATCH! This stock is in a confirmed uptrend staircase.")
         elif is_breakout:
-            st.warning("⚠️ Breakout detected, but the 2-High/2-Low pattern isn't clear yet.")
+            st.warning("⚠️ Breakout detected, but the 2-High/2-Low pattern isn't confirmed in the last 20 days.")
         else:
-            st.error("❌ No breakout detected in the last 6 months.")
+            st.error("❌ No 6-month breakout detected.")
             
         st.write(f"Current Price: ${current_price:.2f}")
-        st.line_chart(prices.tail(60)) # Show a 3-month chart
+        st.write(f"6-Month High was: ${six_month_high:.2f}")
+        st.line_chart(close_prices.tail(60))
