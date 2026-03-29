@@ -1,58 +1,73 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import time
 
-st.set_page_config(page_title="AI Strategy Scanner", layout="wide")
-st.title("📈 Staircase Strategy Scanner")
+st.set_page_config(layout="wide", page_title="AI Batch Scanner")
 
-ticker_symbol = st.text_input("Enter Ticker", "NVDA").upper()
+st.title("🔍 Multi-Stock Strategy Scanner")
+st.write("Enter multiple tickers separated by commas (e.g., NVDA, AAPL, MSFT, COST, TSLA)")
 
-if st.button("Run Research"):
-    stock = yf.Ticker(ticker_symbol)
+# 1. Input for a list of stocks
+user_input = st.text_input("Your Watchlist", "NVDA, AAPL, MSFT, COST, TSLA, AMZN, GOOGL")
+ticker_list = [t.strip().upper() for t in user_input.split(",")]
+
+if st.button("Start Global Scan"):
+    results = []
+    progress_bar = st.progress(0)
     
-    try:
-        # 1. Pull Price History (This usually works even when 'info' is blocked)
-        data = stock.history(period="1y")
+    for index, ticker in enumerate(ticker_list):
+        # Update progress bar
+        progress_bar.progress((index + 1) / len(ticker_list))
+        st.write(f"Analyzing {ticker}...")
         
-        if not data.empty:
-            close_prices = data['Close']
+        try:
+            stock = yf.Ticker(ticker)
+            data = stock.history(period="1y")
             
-            # --- TECHNICAL LOGIC ---
-            six_month_high = float(close_prices.iloc[-126:-1].max())
-            current_price = float(close_prices.iloc[-1])
-            is_breakout = current_price > six_month_high
-            
-            recent = data.tail(20)
-            h1, l1 = float(recent['High'].iloc[0:10].max()), float(recent['Low'].iloc[0:10].min())
-            h2, l2 = float(recent['High'].iloc[10:20].max()), float(recent['Low'].iloc[10:20].min())
-            is_staircase = (h2 > h1) and (l2 > l1)
-
-            # --- DISPLAY TECHNICALS ---
-            st.subheader(f"Analysis for {ticker_symbol}")
-            st.metric("Current Price", f"${current_price:.2f}")
-
-            if is_breakout and is_staircase:
-                st.success("✅ STRATEGY MATCH: 6-Month Breakout + Staircase.")
-            elif is_breakout:
-                st.info("⚠️ BREAKOUT: At highs, but staircase is forming.")
-            else:
-                st.error("❌ NO BREAKOUT: Below 6-month high.")
-
-            st.line_chart(close_prices.tail(100))
-
-            # --- THE SAFETY NET FOR FUNDAMENTALS ---
-            st.divider()
-            st.write("### Financial Health Check")
-            try:
-                info = stock.info
-                rev_growth = info.get('revenueGrowth', 0) * 100
-                profit_margin = info.get('profitMargins', 0) * 100
+            if not data.empty:
+                close_prices = data['Close']
                 
-                col1, col2 = st.columns(2)
-                col1.metric("Revenue Growth", f"{rev_growth:.1f}%")
-                col2.metric("Profit Margin", f"{profit_margin:.1f}%")
-            except:
-                st.warning("📡 Financial data (Revenue/Profit) is temporarily unavailable from Yahoo. Technical chart is still valid.")
+                # --- TECHNICAL LOGIC ---
+                six_month_high = float(close_prices.iloc[-126:-1].max())
+                current_price = float(close_prices.iloc[-1])
+                is_breakout = current_price > six_month_high
+                
+                recent = data.tail(20)
+                h1, l1 = float(recent['High'].iloc[0:10].max()), float(recent['Low'].iloc[0:10].min())
+                h2, l2 = float(recent['High'].iloc[10:20].max()), float(recent['Low'].iloc[10:20].min())
+                is_staircase = (h2 > h1) and (l2 > l1)
 
-    except Exception as e:
-        st.error("Could not load price data. Please wait a moment and try a different ticker.")
+                # --- SCORE ---
+                status = "❌ No Match"
+                if is_breakout and is_staircase:
+                    status = "✅ STRATEGY MATCH"
+                elif is_breakout:
+                    status = "⚠️ Breakout Only"
+
+                results.append({
+                    "Ticker": ticker,
+                    "Price": round(current_price, 2),
+                    "6M High": round(six_month_high, 2),
+                    "Status": status
+                })
+            
+            # SMALL PAUSE: This helps prevent the "Rate Limit" error
+            time.sleep(1) 
+            
+        except Exception as e:
+            st.warning(f"Skipping {ticker} due to data error.")
+
+    # 2. Display the Final Table
+    if results:
+        df = pd.DataFrame(results)
+        st.divider()
+        st.subheader("📊 Scan Results")
+        
+        # Highlight the matches
+        st.dataframe(df.style.applymap(
+            lambda x: 'background-color: #d4edda' if x == "✅ STRATEGY MATCH" else '', 
+            subset=['Status']
+        ))
+    else:
+        st.error("No results found.")
