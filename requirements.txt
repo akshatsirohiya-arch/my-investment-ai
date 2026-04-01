@@ -2,5 +2,5 @@ streamlit
 pandas
 yfinance
 requests
-google-generativeai
+google-genai
 curl_cffi
