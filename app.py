@@ -9,7 +9,7 @@ import time
 # --- CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="AI 180-Day Breakout Hunter")
 
-# Setup Modern 2026 Gemini Client
+# Setup Client
 if "GEMINI_API_KEY" in st.secrets:
     try:
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
@@ -34,38 +34,27 @@ def get_industry_safe(ticker):
     except: return "Limit Reached ⏳"
 
 def run_ai_analysis(top_stocks_df):
-    """Uses the latest stable 2026 models with a 'No-Skip' directive."""
+    """Token-optimized analysis with built-in retry logic for 429 errors."""
     if not client: return "API Client not initialized."
     
-    count = len(top_stocks_df)
-    summary_list = [
-        f"{r['Ticker']} (Price: ${r['Price']:.2f}, Ann. Velocity: {r['Annualized_Return']:.1f}%)" 
-        for _, r in top_stocks_df.iterrows()
-    ]
-    data_string = "\n".join(summary_list)
+    # COMPRESS DATA: Send only what is strictly necessary to save tokens
+    summary_list = [f"{r['Ticker']}(${r['Price']:.1f},{r['Annualized_Return']:.0f}%vel)" for _, r in top_stocks_df.iterrows()]
+    data_string = ",".join(summary_list)
     
-    # The 'STRICT' Prompt to prevent the AI from summarizing only the top 5
     prompt = f"""
-    You are a professional Equity Research Assistant. 
-    I am providing a list of {count} stocks. You MUST provide a specific analysis for EVERY SINGLE ONE of the {count} stocks listed below. Do not skip any. Do not summarize.
-
-    INPUT DATA:
-    {data_string}
-
-    REQUIRED TABLE COLUMNS FOR ALL {count} TICKERS:
-    1. **Ticker**: The stock symbol.
-    2. **Verdict**: [Strong Buy | Buy | Hold | Avoid].
-    3. **2026 Catalyst**: 1-sentence on why it's moving (Energy, Defense, Tech, or Macro).
-    4. **Risk**: High/Med/Low.
-
-    Return ONLY the Markdown table containing all {count} rows.
+    Act as an Equity Analyst. Analyze these {len(top_stocks_df)} stocks: {data_string}.
+    For EVERY ticker, provide:
+    1. Verdict (Buy/Hold/Avoid)
+    2. 1-sentence 2026 logic
+    3. Risk Level
+    Use a Markdown table. Do not skip any stocks.
     """
 
-    # 2026 Stable Model List - using the most robust version for large tables
-    for model_alias in ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.0-flash-lite"]:
+    # Retry Loop for 429 Errors
+    for attempt in range(3):
         try:
             response = client.models.generate_content(
-                model=model_alias,
+                model="gemini-1.5-flash", # Best limits for free tier
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -73,9 +62,13 @@ def run_ai_analysis(top_stocks_df):
             )
             return response.text
         except Exception as e:
-            if model_alias == "gemini-2.0-flash-lite":
+            if "429" in str(e):
+                st.warning(f"Quota hit. Retrying in {attempt + 5}s...")
+                time.sleep(attempt + 5) # Wait progressively longer
+            else:
                 return f"AI Analysis Error: {str(e)}"
-            continue
+    
+    return "Error: Quota exhausted after 3 attempts. Please wait 1 minute and try again."
 
 # --- MAIN APP LOGIC ---
 
@@ -83,38 +76,35 @@ if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
     
     if not df.empty:
-        # Calculate Momentum Metrics
         df['Annualized_Return'] = (df['Slope'] / df['Price']) * 252 * 100
         df['Chart'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
         df = df.sort_values(by="Annualized_Return", ascending=False)
 
-        # Sidebar Controls
+        # Sidebar
         st.sidebar.header("🎚️ Filters")
-        analysis_count = st.sidebar.select_slider("Stocks to Analyze", options=[10, 25, 50], value=25)
+        analysis_count = st.sidebar.select_slider("Stocks to Analyze", options=[10, 20, 30], value=20)
         min_rvol = st.sidebar.slider("Min RVOL", 0.0, 10.0, 1.0)
         
-        # Filter primary data
         df_display = df[df['RVOL'] >= min_rvol].head(analysis_count).copy()
 
-        # Industry Data Toggle
+        # Industry Toggle
         st.sidebar.markdown("---")
-        if st.sidebar.checkbox("🔍 Load Industry Metadata"):
+        if st.sidebar.checkbox("🔍 Load Industries"):
             with st.spinner("Fetching..."):
                 df_display['Industry'] = df_display['Ticker'].apply(get_industry_safe)
         else:
             df_display['Industry'] = "Click to load"
 
-        # --- SECTION 1: AI REPORT ---
+        # AI Report
         st.sidebar.markdown("---")
-        if st.sidebar.button(f"🤖 Generate AI Verdicts for Top {len(df_display)}"):
-            with st.status(f"AI Analysing {len(df_display)} Tickers...", expanded=True):
+        if st.sidebar.button(f"🤖 Run AI Verdicts ({len(df_display)})"):
+            with st.status("Analyzing...", expanded=True):
                 report = run_ai_analysis(df_display)
-            st.markdown("### 🛰️ Geopolitical & Strategic Verdicts")
             st.markdown(report)
             st.markdown("---")
 
-        # --- SECTION 2: INTERACTIVE WATCHLIST ---
-        st.subheader(f"📊 Live 180-Day Watchlist (Top {len(df_display)})")
+        # Watchlist Table
+        st.subheader(f"📊 Top {len(df_display)} Momentum Breakouts")
         st.dataframe(
             df_display,
             use_container_width=True,
