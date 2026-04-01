@@ -1,5 +1,6 @@
 streamlit
-yfinance
 pandas
-openai
+yfinance
 requests
+google-generativeai
+curl_cffi
