@@ -9,7 +9,7 @@ import time
 # --- CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="AI 180-Day Breakout Hunter")
 
-# Setup Client
+# Setup Modern 2026 Gemini Client
 if "GEMINI_API_KEY" in st.secrets:
     try:
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
@@ -27,6 +27,7 @@ st.subheader("Institutional Momentum & AI Strategic Equity Analysis")
 
 @st.cache_data(ttl=86400)
 def get_industry_safe(ticker):
+    """Fetches industry metadata with rate-limiting safety."""
     try:
         time.sleep(0.2)
         tk = yf.Ticker(ticker)
@@ -34,41 +35,46 @@ def get_industry_safe(ticker):
     except: return "Limit Reached ⏳"
 
 def run_ai_analysis(top_stocks_df):
-    """Token-optimized analysis with built-in retry logic for 429 errors."""
+    """Uses 2026 Stable IDs with a fallback if Search Tool is restricted."""
     if not client: return "API Client not initialized."
     
-    # COMPRESS DATA: Send only what is strictly necessary to save tokens
+    # Token Optimization: Strip spaces and labels to fit more stocks in Free Tier
     summary_list = [f"{r['Ticker']}(${r['Price']:.1f},{r['Annualized_Return']:.0f}%vel)" for _, r in top_stocks_df.iterrows()]
     data_string = ",".join(summary_list)
     
     prompt = f"""
-    Act as an Equity Analyst. Analyze these {len(top_stocks_df)} stocks: {data_string}.
+    Act as a Senior Equity Analyst. Analyze these {len(top_stocks_df)} stocks: {data_string}.
     For EVERY ticker, provide:
     1. Verdict (Buy/Hold/Avoid)
-    2. 1-sentence 2026 logic
-    3. Risk Level
-    Use a Markdown table. Do not skip any stocks.
+    2. 1-sentence logic for April 2026
+    3. Risk Level (Low/Med/High)
+    
+    Return a Markdown table. DO NOT skip any tickers.
     """
 
-    # Retry Loop for 429 Errors
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-1.5-flash", # Best limits for free tier
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())]
-                )
-            )
-            return response.text
-        except Exception as e:
-            if "429" in str(e):
-                st.warning(f"Quota hit. Retrying in {attempt + 5}s...")
-                time.sleep(attempt + 5) # Wait progressively longer
-            else:
-                return f"AI Analysis Error: {str(e)}"
+    # Try Gemini 2.0 Flash (Stable 2026)
+    model_id = "gemini-2.0-flash"
     
-    return "Error: Quota exhausted after 3 attempts. Please wait 1 minute and try again."
+    try:
+        # Attempt 1: Analysis WITH Live Google Search
+        response = client.models.generate_content(
+            model=model_id,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())]
+            )
+        )
+        return response.text
+    except Exception as e:
+        # Attempt 2: Fallback WITHOUT Search tool (Fixes 404/v1beta errors)
+        try:
+            st.info("🔄 Optimizing connection: using internal 2026 intelligence...")
+            response = client.models.generate_content(model=model_id, contents=prompt)
+            return f"*(Live-Search Tool currently limited - using internal data)*\n\n{response.text}"
+        except Exception as e2:
+            if "429" in str(e2):
+                return "🚨 Quota Exhausted: Please wait 60 seconds before clicking again."
+            return f"AI Analysis Error: {str(e2)}"
 
 # --- MAIN APP LOGIC ---
 
@@ -76,35 +82,37 @@ if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
     
     if not df.empty:
+        # 1. Momentum Calculations
         df['Annualized_Return'] = (df['Slope'] / df['Price']) * 252 * 100
         df['Chart'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
         df = df.sort_values(by="Annualized_Return", ascending=False)
 
-        # Sidebar
+        # 2. Sidebar Controls
         st.sidebar.header("🎚️ Filters")
-        analysis_count = st.sidebar.select_slider("Stocks to Analyze", options=[10, 20, 30], value=20)
-        min_rvol = st.sidebar.slider("Min RVOL", 0.0, 10.0, 1.0)
+        # Keep count at 25 or below for Free Tier stability
+        analysis_count = st.sidebar.select_slider("Stocks to Analyze", options=[10, 20, 30], value=25)
+        min_rvol = st.sidebar.slider("Min RVOL (Volume Multiplier)", 0.0, 10.0, 1.0)
         
         df_display = df[df['RVOL'] >= min_rvol].head(analysis_count).copy()
 
-        # Industry Toggle
+        # 3. Industry Data Toggle
         st.sidebar.markdown("---")
-        if st.sidebar.checkbox("🔍 Load Industries"):
-            with st.spinner("Fetching..."):
+        if st.sidebar.checkbox("🔍 Load Industry Data"):
+            with st.spinner("Classifying Sectors..."):
                 df_display['Industry'] = df_display['Ticker'].apply(get_industry_safe)
         else:
             df_display['Industry'] = "Click to load"
 
-        # AI Report
+        # 4. AI Trigger
         st.sidebar.markdown("---")
         if st.sidebar.button(f"🤖 Run AI Verdicts ({len(df_display)})"):
-            with st.status("Analyzing...", expanded=True):
+            with st.status("AI scanning market context...", expanded=True):
                 report = run_ai_analysis(df_display)
             st.markdown(report)
             st.markdown("---")
 
-        # Watchlist Table
-        st.subheader(f"📊 Top {len(df_display)} Momentum Breakouts")
+        # 5. The Main Table
+        st.subheader(f"📊 Live 180-Day Breakout Watchlist")
         st.dataframe(
             df_display,
             use_container_width=True,
@@ -119,6 +127,6 @@ if os.path.exists("daily_watchlist.csv"):
             }
         )
     else:
-        st.warning("No breakouts found.")
+        st.warning("No breakout stocks found in today's data.")
 else:
     st.error("Missing daily_watchlist.csv. Run your scanner first.")
