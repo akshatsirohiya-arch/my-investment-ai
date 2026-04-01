@@ -2,73 +2,54 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import time
 
 # --- CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="AI 180-Day Breakout Hunter")
 
-# Securely load Gemini API Key from Streamlit Cloud Secrets
+# Setup New 2026 Gemini Client
 if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    st.sidebar.warning("🔑 Gemini API Key missing in Streamlit Secrets.")
+    st.sidebar.warning("🔑 Gemini API Key missing in Secrets.")
+    client = None
 
 st.title("🏹 180-Day Range Breakout Hunter")
-st.subheader("Institutional Momentum & AI Geopolitical Intelligence (April 2026)")
+st.subheader("Institutional Momentum & AI Geopolitical Intelligence")
 
 # --- FUNCTIONS ---
 
 @st.cache_data(ttl=86400)
 def get_industry_safe(ticker):
-    """Fetches industry with rate-limit protection and 24h caching."""
     try:
-        time.sleep(0.2) # Small delay to respect Yahoo Finance limits
+        time.sleep(0.2)
         tk = yf.Ticker(ticker)
-        industry = tk.info.get('industry')
-        return industry if industry else "Unknown Sector 🔍"
-    except: 
-        return "Limit Reached ⏳"
+        return tk.info.get('industry', 'Unknown 🔍')
+    except: return "Limit Reached ⏳"
 
 def run_ai_analysis(top_stocks_df):
-    """Analyzes the top 50 breakouts using a Multi-Model Fallback system."""
-    # List of models to try in order of 2026 stability/availability
-    model_names = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-pro']
+    """Uses the 2026 Google GenAI SDK for Grounded Analysis."""
+    if not client: return "API Key missing."
     
-    # Prepare the stock data for the AI prompt
-    summary_list = [
-        f"{r['Ticker']} (${r['Price']:.2f}, {r['Annualized_Return']:.1f}% Velocity)" 
-        for _, r in top_stocks_df.iterrows()
-    ]
+    summary_list = [f"{r['Ticker']} (${r['Price']:.2f}, {r['Annualized_Return']:.1f}% Velocity)" for _, r in top_stocks_df.iterrows()]
     data_string = "; ".join(summary_list)
     
-    prompt = f"""
-    You are a Senior Geopolitical Analyst. Analyze these Top 50 stocks breaking 180-day highs:
-    {data_string}
+    prompt = f"Analyze these Top 50 stocks breaking 180-day highs regarding the April 2026 Iran conflict: {data_string}. Categorize by War Sensitivity, Top 5 Picks, and Volatility Traps."
 
-    TASKS:
-    1. Identify Energy/Defense plays heavily linked to the Iran/Middle-East conflict.
-    2. Provide a 'War-Risk Warning' (Is it a Safe Haven or a Volatility Trap?).
-    3. Give a 1-sentence BUY/HOLD/AVOID verdict for each based on latest April 2026 news.
-    
-    Format the response as a professional Markdown report.
-    """
-
-    for m_name in model_names:
-        try:
-            model = genai.GenerativeModel(model_name=m_name)
-            # Using the 2026 Google Search Grounding tool
-            response = model.generate_content(
-                prompt,
-                tools=[{"google_search_retrieval": {}}]
+    try:
+        # New 2026 'Gemini 3 Flash' model with Search Grounding
+        response = client.models.generate_content(
+            model="gemini-3-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())]
             )
-            return response.text
-        except Exception as e:
-            # If this is the last model in the list and it fails, return the error
-            if m_name == model_names[-1]:
-                return f"AI Analysis Error: All models failed. Last error: {str(e)}"
-            # Otherwise, 'continue' to the next model in the list
-            continue
+        )
+        return response.text
+    except Exception as e:
+        return f"AI Analysis Error: {str(e)}"
 
 # --- MAIN APP LOGIC ---
 
@@ -76,46 +57,32 @@ if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
     
     if not df.empty:
-        # 1. CALCULATE TREND VELOCITY (ANNUALIZED %)
-        # Formula: (Daily Slope / Price) * 252 Trading Days * 100
+        # Annualized Return Calculation
         df['Annualized_Return'] = (df['Slope'] / df['Price']) * 252 * 100
-        
-        # 2. ADD TRADINGVIEW LINKS & SORT BY VELOCITY
         df['Chart'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
         df = df.sort_values(by="Annualized_Return", ascending=False)
 
-        # 3. SIDEBAR FILTERS
+        # Filters
         st.sidebar.header("🎚️ Filters")
         min_rvol = st.sidebar.slider("Min RVOL (Vol Surge)", 0.0, 10.0, 1.0)
-        
-        # Filter dataframe for display
         df_display = df[df['RVOL'] >= min_rvol].head(100).copy()
 
-        # 4. INDUSTRY TOGGLE (Optional to prevent Yahoo N/A blocks)
+        # Industry Toggle
         st.sidebar.markdown("---")
-        show_industry = st.sidebar.checkbox("🔍 Load Industries (Slower)")
-        if show_industry:
-            with st.spinner("Fetching Sector Data from Yahoo..."):
+        if st.sidebar.checkbox("🔍 Load Industries"):
+            with st.spinner("Fetching Sectors..."):
                 df_display['Industry'] = df_display['Ticker'].apply(get_industry_safe)
         else:
             df_display['Industry'] = "Click sidebar to load"
 
-        # 5. AI ANALYST TRIGGER (TOP 50)
+        # AI Trigger
         st.sidebar.markdown("---")
-        st.sidebar.header("🤖 AI Analyst")
-        if st.sidebar.button("Run AI Deep-Dive (Top 50)"):
-            with st.status("Gemini is searching 2026 war news...", expanded=True) as status:
-                st.write("Extracting top 50 breakout candidates...")
-                top_50 = df_display.head(50)
-                st.write("Consulting Geopolitical Intelligence...")
-                ai_report = run_ai_analysis(top_50)
-                status.update(label="Analysis Complete!", state="complete")
-            
-            st.markdown("### 🛰️ Gemini Geopolitical Intelligence Report")
+        if st.sidebar.button("🤖 Run AI Deep-Dive (Top 50)"):
+            with st.status("Gemini 3 searching war news...", expanded=True):
+                ai_report = run_ai_analysis(df_display.head(50))
             st.markdown(ai_report)
-            st.markdown("---")
 
-        # 6. DATA TABLE DISPLAY
+        # Table Display
         st.dataframe(
             df_display,
             use_container_width=True,
@@ -126,16 +93,10 @@ if os.path.exists("daily_watchlist.csv"):
                 "Annualized_Return": st.column_config.NumberColumn("Ann. Velocity %", format="%.1f%%"),
                 "RVOL": st.column_config.NumberColumn("Rel Volume", format="%.2fx"),
                 "Industry": st.column_config.TextColumn("Industry"),
-                "High_180d": None, "Slope": None # Hiding raw technical columns
+                "High_180d": None, "Slope": None
             }
         )
-        
-        # 7. MOMENTUM HIGHLIGHT
-        if not df_display.empty:
-            leader = df_display.iloc[0]
-            st.success(f"🏆 **Momentum Leader:** {leader['Ticker']} is trending at an annualized velocity of **{leader['Annualized_Return']:.1f}%**.")
-
     else:
-        st.warning("No stocks cleared their 180-day high in today's scan.")
+        st.warning("No breakouts found.")
 else:
-    st.error("Data file (daily_watchlist.csv) not found. Ensure scanner.py has run successfully.")
+    st.error("Data file missing. Run scanner.py first.")
