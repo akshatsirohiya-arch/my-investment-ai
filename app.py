@@ -34,34 +34,35 @@ def get_industry_safe(ticker):
     except: return "Limit Reached ⏳"
 
 def run_ai_analysis(top_stocks_df):
-    """Uses the latest stable 2026 models for full equity analysis."""
+    """Uses the latest stable 2026 models with a 'No-Skip' directive."""
     if not client: return "API Client not initialized."
     
-    # Prepare data for up to 100 stocks
+    count = len(top_stocks_df)
     summary_list = [
-        f"{r['Ticker']} (${r['Price']:.2f}, Vol: {r['RVOL']:.1f}x, Velocity: {r['Annualized_Return']:.1f}%)" 
+        f"{r['Ticker']} (Price: ${r['Price']:.2f}, Ann. Velocity: {r['Annualized_Return']:.1f}%)" 
         for _, r in top_stocks_df.iterrows()
     ]
     data_string = "\n".join(summary_list)
     
+    # The 'STRICT' Prompt to prevent the AI from summarizing only the top 5
     prompt = f"""
-    Perform a professional Equity Research analysis on the following Top {len(top_stocks_df)} stocks 
-    currently breaking out of 180-day price ranges.
-    
-    STOCK DATA:
+    You are a professional Equity Research Assistant. 
+    I am providing a list of {count} stocks. You MUST provide a specific analysis for EVERY SINGLE ONE of the {count} stocks listed below. Do not skip any. Do not summarize.
+
+    INPUT DATA:
     {data_string}
 
-    REQUIRED OUTPUT FOR EACH STOCK:
-    1. **Verdict**: [Strong Buy | Buy | Hold | Avoid]
-    2. **Strategic Logic**: 1-sentence reasoning (consider sector trends, volume surge, and 2026 macro outlook).
-    3. **Risk Profile**: Identify if it's a 'Momentum Leader', 'Safe Haven', or 'Volatility Trap'.
-    4. **Geopolitical Context**: Briefly mention impact from current April 2026 global conflicts only if relevant to that specific ticker.
+    REQUIRED TABLE COLUMNS FOR ALL {count} TICKERS:
+    1. **Ticker**: The stock symbol.
+    2. **Verdict**: [Strong Buy | Buy | Hold | Avoid].
+    3. **2026 Catalyst**: 1-sentence on why it's moving (Energy, Defense, Tech, or Macro).
+    4. **Risk**: High/Med/Low.
 
-    Format the final report as a clean Markdown table.
+    Return ONLY the Markdown table containing all {count} rows.
     """
 
-    # 2026 Stable Model List
-    for model_alias in ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-2.5-pro"]:
+    # 2026 Stable Model List - using the most robust version for large tables
+    for model_alias in ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.0-flash-lite"]:
         try:
             response = client.models.generate_content(
                 model=model_alias,
@@ -72,7 +73,7 @@ def run_ai_analysis(top_stocks_df):
             )
             return response.text
         except Exception as e:
-            if model_alias == "gemini-2.5-pro": # Last attempt
+            if model_alias == "gemini-2.0-flash-lite":
                 return f"AI Analysis Error: {str(e)}"
             continue
 
@@ -89,28 +90,31 @@ if os.path.exists("daily_watchlist.csv"):
 
         # Sidebar Controls
         st.sidebar.header("🎚️ Filters")
-        analysis_count = st.sidebar.select_slider("Analyze Top X Stocks", options=[25, 50, 100], value=50)
-        min_rvol = st.sidebar.slider("Min RVOL (Volume Multiplier)", 0.0, 10.0, 1.0)
+        analysis_count = st.sidebar.select_slider("Stocks to Analyze", options=[10, 25, 50], value=25)
+        min_rvol = st.sidebar.slider("Min RVOL", 0.0, 10.0, 1.0)
         
+        # Filter primary data
         df_display = df[df['RVOL'] >= min_rvol].head(analysis_count).copy()
 
-        # Industry Data
+        # Industry Data Toggle
         st.sidebar.markdown("---")
-        if st.sidebar.checkbox("🔍 Load Industry Data"):
-            with st.spinner("Classifying..."):
+        if st.sidebar.checkbox("🔍 Load Industry Metadata"):
+            with st.spinner("Fetching..."):
                 df_display['Industry'] = df_display['Ticker'].apply(get_industry_safe)
         else:
             df_display['Industry'] = "Click to load"
 
-        # AI Recommendations Button
+        # --- SECTION 1: AI REPORT ---
         st.sidebar.markdown("---")
-        if st.sidebar.button(f"🤖 Generate AI Verdicts (Top {analysis_count})"):
-            with st.status(f"AI scanning {analysis_count} tickers...", expanded=True):
-                st.write("Fetching latest 2026 market context...")
-                ai_report = run_ai_analysis(df_display)
-            st.markdown(ai_report)
+        if st.sidebar.button(f"🤖 Generate AI Verdicts for Top {len(df_display)}"):
+            with st.status(f"AI Analysing {len(df_display)} Tickers...", expanded=True):
+                report = run_ai_analysis(df_display)
+            st.markdown("### 🛰️ Geopolitical & Strategic Verdicts")
+            st.markdown(report)
+            st.markdown("---")
 
-        # Main Table Display
+        # --- SECTION 2: INTERACTIVE WATCHLIST ---
+        st.subheader(f"📊 Live 180-Day Watchlist (Top {len(df_display)})")
         st.dataframe(
             df_display,
             use_container_width=True,
@@ -125,6 +129,6 @@ if os.path.exists("daily_watchlist.csv"):
             }
         )
     else:
-        st.warning("No breakouts found in the CSV.")
+        st.warning("No breakouts found.")
 else:
     st.error("Missing daily_watchlist.csv. Run your scanner first.")
