@@ -1,130 +1,67 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 import os
-from google import genai
-from google.genai import types
-import time
-import datetime
+import urllib.parse
 
 # --- CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="AI 180-Day Breakout Hunter")
+st.set_page_config(layout="wide", page_title="Institutional Momentum Hub")
 
-# Setup Modern 2026 Gemini Client
-if "GEMINI_API_KEY" in st.secrets:
-    try:
-        # FORCE API version 'v1' to avoid the 404 v1beta error
-        client = genai.Client(
-            api_key=st.secrets["GEMINI_API_KEY"],
-            http_options={'api_version': 'v1'}
-        )
-    except Exception as e:
-        st.sidebar.error(f"Client Init Error: {e}")
-        client = None
-else:
-    st.sidebar.warning("🔑 Gemini API Key missing in Secrets.")
-    client = None
+st.title("🏹 Momentum Strategy Command Center")
+st.subheader("180-Day Range Breakouts & Manual AI Deep-Dives")
 
-# --- CACHING LOGIC ---
-CACHE_FILE = "ai_analysis_cache.txt"
-
-def save_ai_report(text):
-    with open(CACHE_FILE, "w") as f:
-        f.write(f"{datetime.date.today()}\n{text}")
-
-def load_ai_report():
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "r") as f:
-            lines = f.readlines()
-            if lines and lines[0].strip() == str(datetime.date.today()):
-                return "".join(lines[1:])
-    return None
-
-# --- FUNCTIONS ---
-
-@st.cache_data(ttl=86400)
-def get_industry_safe(ticker):
-    try:
-        time.sleep(0.2)
-        tk = yf.Ticker(ticker)
-        return tk.info.get('industry', 'Unknown 🔍')
-    except: return "Limit Reached ⏳"
-
-def run_ai_analysis(top_stocks_df):
-    """Uses 2026 Stable Gemini 2.5/3.1 IDs."""
-    if not client: return "API Client not initialized."
+# --- HELPER: GENERATE GEMINI LINK ---
+def get_gemini_link(ticker, price, velocity):
+    base_url = "https://gemini.google.com/app"
+    # A professional-grade prompt for the Gemini App
+    prompt = f"""Act as a hedge fund analyst. Perform a deep-dive on {ticker} currently trading at ${price}. 
+    It just broke a 180-day price range with a momentum velocity of {velocity}%.
+    1. Check for recent news or earnings gaps.
+    2. Analyze if this breakout is sustainable or a 'blow-off top'.
+    3. Look for institutional accumulation patterns in the last 30 days.
+    4. Provide a Final Verdict: Buy, Watch, or Avoid."""
     
-    summary_list = [f"{r['Ticker']}(${r['Price']:.1f},{r['Annualized_Return']:.0f}%vel)" for _, r in top_stocks_df.iterrows()]
-    data_string = ",".join(summary_list)
-    
-    prompt = f"""
-    Act as a Senior Equity Analyst. Analyze these {len(top_stocks_df)} stocks: {data_string}.
-    For EVERY ticker, provide:
-    1. Verdict (Buy/Hold/Avoid)
-    2. 1-sentence logic for April 2026
-    3. Risk Level (Low/Med/High)
-    Return a Markdown table. DO NOT skip any tickers.
-    """
+    # URL Encode the prompt
+    encoded_prompt = urllib.parse.quote(prompt)
+    return f"https://gemini.google.com/app?q={encoded_prompt}"
 
-    # Primary: Gemini 2.5 Flash (Best for large lists/Free Tier)
-    # Secondary: Gemini 3.1 Flash-Lite (Fastest)
-    for model_id in ["gemini-2.5-flash", "gemini-3.1-flash-lite-preview"]:
-        try:
-            response = client.models.generate_content(
-                model=model_id,
-                contents=prompt
-            )
-            return response.text
-        except Exception as e:
-            if model_id == "gemini-3.1-flash-lite-preview":
-                return f"AI Analysis Error: {str(e)}"
-            continue
-
-# --- MAIN APP ---
-st.title("🏹 180-Day Range Breakout Hunter")
-st.subheader("Institutional Momentum & AI Strategic Equity Analysis")
-
+# --- MAIN LOGIC ---
 if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
+    
     if not df.empty:
+        # 1. Calculations
         df['Annualized_Return'] = (df['Slope'] / df['Price']) * 252 * 100
-        df['Chart'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
-        df = df.sort_values(by="Annualized_Return", ascending=False)
+        
+        # 2. Add the "Deep Dive" Link Column
+        df['AI Deep Dive'] = df.apply(lambda x: get_gemini_link(x['Ticker'], x['Price'], round(x['Annualized_Return'], 1)), axis=1)
+        
+        # 3. Sidebar Filters
+        st.sidebar.header("🎯 Quality Filters")
+        min_rvol = st.sidebar.slider("Min Relative Volume (RVOL)", 0.5, 5.0, 1.2, help="Filter out low-volume breakouts")
+        min_velocity = st.sidebar.slider("Min Velocity %", 10, 200, 30)
+        
+        # Apply filters to a display copy, NOT the AI source
+        df_filtered = df[(df['RVOL'] >= min_rvol) & (df['Annualized_Return'] >= min_velocity)].copy()
+        df_filtered = df_filtered.sort_values(by="Annualized_Return", ascending=False)
 
-        # Sidebar
-        st.sidebar.header("🎚️ Filters")
-        analysis_count = st.sidebar.select_slider("Stocks to Analyze", options=[10, 20, 30], value=20)
-        min_rvol = st.sidebar.slider("Min RVOL", 0.0, 10.0, 1.0)
-        df_display = df[df['RVOL'] >= min_rvol].head(analysis_count).copy()
+        # 4. Display the Full Watchlist
+        st.markdown(f"Showing **{len(df_filtered)}** high-momentum setups.")
+        
+        st.dataframe(
+            df_filtered,
+            use_container_width=True,
+            column_config={
+                "Ticker": st.column_config.TextColumn("Ticker"),
+                "AI Deep Dive": st.column_config.LinkColumn("🤖 Deep Dive", display_text="Ask Gemini"),
+                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "Annualized_Return": st.column_config.NumberColumn("Velocity %", format="%.1f%%"),
+                "RVOL": st.column_config.NumberColumn("Rel Volume", format="%.2fx"),
+                "High_180d": None, "Slope": None # Hide these technical cols
+            },
+            hide_index=True
+        )
 
-        # PERSISTENT AI REPORT SECTION
-        st.sidebar.markdown("---")
-        existing_report = load_ai_report()
-
-        if existing_report:
-            st.success("✅ Showing saved AI analysis for today.")
-            st.markdown(existing_report)
-            st.download_button("📥 Download Report", existing_report, f"Analysis_{datetime.date.today()}.txt")
-        else:
-            if st.sidebar.button(f"🤖 Generate AI Verdicts ({len(df_display)})"):
-                with st.status("AI scanning market context...", expanded=True):
-                    report = run_ai_analysis(df_display)
-                    if "Error" not in report:
-                        save_ai_report(report)
-                st.markdown(report)
-
-        # Main Table
-        st.subheader("📊 Live 180-Day Breakout Watchlist")
-        st.dataframe(df_display, use_container_width=True, column_config={
-            "Ticker": st.column_config.TextColumn("Ticker"),
-            "Chart": st.column_config.LinkColumn("Chart 📈", display_text="View"),
-            "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-            "Annualized_Return": st.column_config.NumberColumn("Velocity %", format="%.1f%%"),
-            "RVOL": st.column_config.NumberColumn("Rel Volume", format="%.2fx"),
-            "Industry": st.column_config.TextColumn("Industry"),
-            "High_180d": None, "Slope": None
-        })
     else:
-        st.warning("No breakout stocks found.")
+        st.warning("Scanner found 0 stocks. Try loosening filters in your scanner.py script.")
 else:
-    st.error("Missing daily_watchlist.csv. Ensure your 6AM IST scanner has run.")
+    st.error("Missing daily_watchlist.csv. Run your 6AM IST GitHub Action.")
