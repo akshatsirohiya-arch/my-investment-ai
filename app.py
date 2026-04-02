@@ -13,6 +13,7 @@ st.set_page_config(layout="wide", page_title="AI 180-Day Breakout Hunter")
 # Setup Client
 if "GEMINI_API_KEY" in st.secrets:
     try:
+        # Initializing the client with the standard API version
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     except Exception as e:
         st.sidebar.error(f"Client Init Error: {e}")
@@ -25,12 +26,10 @@ else:
 CACHE_FILE = "ai_analysis_cache.txt"
 
 def save_ai_report(text):
-    """Saves report with today's date to avoid re-running the AI."""
     with open(CACHE_FILE, "w") as f:
         f.write(f"{datetime.date.today()}\n{text}")
 
 def load_ai_report():
-    """Returns saved report if it exists and was made today."""
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, "r") as f:
             lines = f.readlines()
@@ -38,7 +37,7 @@ def load_ai_report():
                 return "".join(lines[1:])
     return None
 
-# --- AI FUNCTIONS ---
+# --- FUNCTIONS ---
 
 @st.cache_data(ttl=86400)
 def get_industry_safe(ticker):
@@ -49,7 +48,10 @@ def get_industry_safe(ticker):
     except: return "Limit Reached ⏳"
 
 def run_ai_analysis(top_stocks_df):
+    """Refined to be extremely stable to avoid ClientError."""
     if not client: return "API Client not initialized."
+    
+    # Token-efficient data string
     summary_list = [f"{r['Ticker']}(${r['Price']:.1f},{r['Annualized_Return']:.0f}%vel)" for _, r in top_stocks_df.iterrows()]
     data_string = ",".join(summary_list)
     
@@ -59,20 +61,25 @@ def run_ai_analysis(top_stocks_df):
     1. Verdict (Buy/Hold/Avoid)
     2. 1-sentence logic for April 2026
     3. Risk Level (Low/Med/High)
-    Return a Markdown table. DO NOT skip any tickers.
+    Return a Markdown table.
     """
 
-    model_id = "gemini-2.0-flash"
+    # We use 'gemini-1.5-flash' here as it is the most compatible across all API tiers
+    model_id = "gemini-1.5-flash"
+    
     try:
+        # STRIPPED-DOWN CALL: No Search tool, no complex config. 
+        # This is the 'safest' way to avoid ClientError 404/400.
         response = client.models.generate_content(
-            model=model_id, contents=prompt,
-            config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
+            model=model_id,
+            contents=prompt
         )
-        return response.text
-    except:
-        # Fallback without search tool
-        response = client.models.generate_content(model=model_id, contents=prompt)
-        return response.text
+        if response and response.text:
+            return response.text
+        else:
+            return "AI returned an empty response. Please try again."
+    except Exception as e:
+        return f"AI Analysis Error: {str(e)}"
 
 # --- MAIN APP ---
 st.title("🏹 180-Day Range Breakout Hunter")
@@ -81,6 +88,7 @@ st.subheader("Institutional Momentum & AI Strategic Equity Analysis")
 if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
     if not df.empty:
+        # Calculations
         df['Annualized_Return'] = (df['Slope'] / df['Price']) * 252 * 100
         df['Chart'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
         df = df.sort_values(by="Annualized_Return", ascending=False)
@@ -110,12 +118,15 @@ if os.path.exists("daily_watchlist.csv"):
         # Main Table
         st.subheader("📊 Live 180-Day Breakout Watchlist")
         st.dataframe(df_display, use_container_width=True, column_config={
+            "Ticker": st.column_config.TextColumn("Ticker"),
             "Chart": st.column_config.LinkColumn("Chart 📈", display_text="View"),
             "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
             "Annualized_Return": st.column_config.NumberColumn("Velocity %", format="%.1f%%"),
+            "RVOL": st.column_config.NumberColumn("Rel Volume", format="%.2fx"),
+            "Industry": st.column_config.TextColumn("Industry"),
             "High_180d": None, "Slope": None
         })
     else:
         st.warning("No breakout stocks found.")
 else:
-    st.error("Missing daily_watchlist.csv. Run your scanner first.")
+    st.error("Missing daily_watchlist.csv. Please ensure your 6AM scanner has run.")
