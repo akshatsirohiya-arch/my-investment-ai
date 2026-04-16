@@ -4,3 +4,4 @@ yfinance
 requests
 google-genai
 curl_cffi
+fpdf2
