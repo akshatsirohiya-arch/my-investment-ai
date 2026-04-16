@@ -3,14 +3,15 @@ import pandas as pd
 import yfinance as yf
 import os
 import datetime
+import time
 from google import genai
 
-# --- CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Multi-Bagger Command Center")
+# --- 1. SETTINGS & CLIENT INIT ---
+st.set_page_config(layout="wide", page_title="AI Multi-Bagger Hunter 2026")
 
-# Initialize Gemini Client
 if "GEMINI_API_KEY" in st.secrets:
     try:
+        # Forcing v1 stable API with the modern GenAI SDK
         client = genai.Client(
             api_key=st.secrets["GEMINI_API_KEY"],
             http_options={'api_version': 'v1'}
@@ -19,69 +20,89 @@ if "GEMINI_API_KEY" in st.secrets:
         st.sidebar.error(f"Client Init Error: {e}")
         client = None
 else:
-    st.sidebar.warning("🔑 Gemini API Key missing.")
+    st.sidebar.warning("🔑 Missing GEMINI_API_KEY in Secrets.")
     client = None
 
-# --- AI ANALYSIS FUNCTION ---
-def get_batch_analysis(df):
-    if not client: return "AI Client not initialized."
-    csv_data = df[['Ticker', 'Price', 'Velocity %', 'RVOL']].to_csv(index=False)
-    prompt = f"""
-    Analyze this 180-day breakout watchlist:
-    {csv_data}
-    1. Identify the 'Top 10' multi-baggers for 2026.
-    2. Group by Sector.
-    3. Call out 'Fake Breakouts'.
-    Return a Markdown report with a table.
-    """
-    try:
-        response = client.models.generate_content(model="gemini-3-flash", contents=prompt)
-        return response.text
-    except Exception as e:
-        return f"AI Analysis Error: {str(e)}"
+# --- 2. CORE FUNCTIONS ---
 
-# --- MAIN UI ---
+def get_batch_analysis(df):
+    """Sends filtered list to AI. Fixed for 2026 404 errors."""
+    if not client: return "AI Client not initialized."
+    
+    # Context compression for faster AI reasoning
+    csv_data = df[['Ticker', 'Price', 'Velocity %', 'RVOL']].to_csv(index=False)
+    
+    prompt = f"""
+    Act as a Senior Growth Equity Analyst. Analyze this 180-day breakout watchlist:
+    {csv_data}
+    1. Identify the 'Top 10' potential multi-baggers for the 2026 cycle.
+    2. Group them by Sector strength.
+    3. Flag 'Fake Breakouts' where velocity doesn't match volume profile.
+    Return a Markdown report with a summary table.
+    """
+
+    # 2026 Stable aliases: 'preview' suffix is required for Gemini 3 in v1 endpoint
+    models_to_try = ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
+    
+    for model_id in models_to_try:
+        try:
+            response = client.models.generate_content(model=model_id, contents=prompt)
+            return response.text
+        except Exception:
+            continue # Try next model if 404 or rate limited
+            
+    return "AI Analysis Error: All 2026 model endpoints returned 404. Check API Key permissions."
+
+@st.cache_data(ttl=86400)
+def get_industry_fast(ticker):
+    """Cached industry lookup to prevent app lag."""
+    try:
+        time.sleep(0.1)
+        return yf.Ticker(ticker).info.get('industry', 'N/A')
+    except:
+        return "N/A"
+
+# --- 3. UI LAYOUT ---
+
 if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
     
     if not df.empty:
-        # 1. Processing
+        # Data Prep
         df['Velocity %'] = (df['Slope'] / df['Price']) * 252 * 100
         df['Chart 📈'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
         
-        # 2. Sidebar Filters (RELAXED DEFAULTS)
-        st.sidebar.header("🎯 Filter Settings")
-        min_rvol = st.sidebar.slider("Min Rel Volume", 0.0, 5.0, 0.0) # Set to 0.0 to see everything
-        min_vel = st.sidebar.slider("Min Velocity %", 0, 300, 0)     # Set to 0 to see everything
+        # Sidebar Controls
+        st.sidebar.header("🎯 Quality Filters")
+        min_rvol = st.sidebar.slider("Min Relative Volume (RVOL)", 0.0, 10.0, 0.0)
+        min_vel = st.sidebar.slider("Min Velocity % (Annualized)", 0, 500, 0)
         
         df_filtered = df[(df['RVOL'] >= min_rvol) & (df['Velocity %'] >= min_vel)].copy()
         df_filtered = df_filtered.sort_values(by="Velocity %", ascending=False)
 
-        # --- SECTION 1: AI ANALYSIS (TOP) ---
-        st.header("🤖 AI Strategic Recommendations")
-        
-        # FIX: The button now shows even if the list is small
+        # SECTION 1: AI RECOMMENDATIONS (TOP)
+        st.header("🤖 AI Strategic Analysis")
         if not df_filtered.empty:
-            if st.button("🚀 Run Multi-Bagger Analysis"):
-                with st.status("Gemini 3 processing...", expanded=True):
+            if st.button("🚀 Identify Top 20 Multi-Baggers"):
+                with st.status("Gemini 3 performing batch analysis...", expanded=True):
                     report = get_batch_analysis(df_filtered)
                 st.markdown(report)
             else:
-                st.info("Click the button to analyze the filtered list below.")
+                st.info("Click to run AI analysis on the filtered list below.")
         else:
-            st.warning("No stocks match your filters. Adjust the sidebar to see more.")
+            st.warning("Filter results are empty. Adjust sliders to include more stocks.")
 
         st.markdown("---")
 
-        # --- SECTION 2: RAW WATCHLIST (BOTTOM) ---
-        st.header(f"📊 Full Watchlist ({len(df_filtered)} stocks)")
+        # SECTION 2: THE WATCHLIST (BOTTOM)
+        st.header(f"📊 Live Momentum Shortlist ({len(df_filtered)} stocks)")
         
-        if st.checkbox("🔍 Load Industry Data"):
-            with st.spinner("Fetching..."):
-                df_filtered['Industry'] = df_filtered['Ticker'].map(
-                    lambda x: yf.Ticker(x).info.get('industry', 'N/A')
-                )
+        load_ind = st.checkbox("🔍 Load Industry & Sector Data")
+        if load_ind:
+            with st.spinner("Classifying..."):
+                df_filtered['Industry'] = df_filtered['Ticker'].apply(get_industry_fast)
 
+        # Professional Data Table
         st.dataframe(
             df_filtered,
             use_container_width=True,
@@ -97,6 +118,6 @@ if os.path.exists("daily_watchlist.csv"):
             hide_index=True
         )
     else:
-        st.warning("The daily_watchlist.csv file is empty.")
+        st.warning("The daily scan found no breakouts today.")
 else:
-    st.error("Missing daily_watchlist.csv. Your 6AM scan might have failed.")
+    st.error("Missing 'daily_watchlist.csv'. Ensure the GitHub Action scanner is active.")
