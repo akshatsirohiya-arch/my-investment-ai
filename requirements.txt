@@ -1,7 +1,5 @@
+google-genai
 streamlit
 pandas
 yfinance
-requests
-google-genai
-curl_cffi
 fpdf2
