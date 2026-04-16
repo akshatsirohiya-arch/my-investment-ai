@@ -7,59 +7,88 @@ import time
 from google import genai
 
 # --- 1. SETTINGS & CLIENT INIT ---
-st.set_page_config(layout="wide", page_title="Momentum Command Center")
+st.set_page_config(layout="wide", page_title="Multi-Bagger Intel 2026")
 
 if "GEMINI_API_KEY" in st.secrets:
     try:
-        # 2026 Stable Client: Using the standard v1 endpoint for guaranteed uptime
+        # Using v1beta for access to the more capable 'pro' reasoning models
         client = genai.Client(
             api_key=st.secrets["GEMINI_API_KEY"],
-            http_options={'api_version': 'v1'} 
+            http_options={'api_version': 'v1beta'} 
         )
     except Exception as e:
         st.sidebar.error(f"Client Init Error: {e}")
         client = None
 else:
-    st.sidebar.warning("🔑 Missing GEMINI_API_KEY in Streamlit Secrets.")
+    st.sidebar.warning("🔑 Missing GEMINI_API_KEY.")
     client = None
 
-# --- 2. LOGIC FUNCTIONS ---
+# --- 2. THE "DEEP DIVE" ENGINE ---
 
-def get_batch_summary(df):
-    """Summarizes top movers using the stable 2026 workhorse model."""
+def get_high_conviction_analysis(df):
+    """Performs a comprehensive sector and fundamental cross-reference."""
     if not client: return "AI Client not initialized."
     
-    # Context compression: Only send top 15 to keep AI sharp
-    csv_context = df[['Ticker', 'Price', 'Velocity %', 'RVOL']].head(15).to_csv(index=False)
+    # Send more data: Top 30 stocks for better comparative context
+    csv_context = df[['Ticker', 'Price', 'Velocity %', 'RVOL']].head(30).to_csv(index=False)
     
     prompt = f"""
-    Analyze these 180-day breakouts:
+    Act as a Senior Hedge Fund Portfolio Manager. 
+    Analyze this 180-day breakout watchlist:
     {csv_context}
     
-    1. Identify the 'Top 3' multi-bagger candidates for 2026 based on momentum quality.
-    2. Group by Sector.
-    3. Call out 'Fake Breakouts' (High velocity but suspicious volume).
-    Return a concise Markdown report.
+    REQUIRED RESEARCH DEPTH:
+    1. SECTOR ROTATION: Which 3-4 stocks belong to the strongest 2026 macro themes (e.g. AI Infra, Nuclear, Defense, or Biotech)?
+    2. THE 'MOATS': For the top 5 candidates, explain the likely fundamental reason for this breakout. 
+    3. MOMENTUM QUALITY: Identify which stocks have 'Institutional Accumulation' (steady velocity + high RVOL) vs 'Retail Spikes'.
+    4. ENTRY STRATEGY: Provide specific buy-zone advice for the top 10 tickers.
+    5. MULTI-BAGGER POTENTIAL: Which 3 have the specific characteristics of a 5x-10x runner?
+    
+    Format with professional headings and clear, actionable bullet points.
     """
     
     try:
-        # gemini-2.5-flash is the 2026 stable standard for high-speed analysis
+        # Switching to the 'Pro' model for much deeper reasoning and longer responses
         response = client.models.generate_content(
-            model="gemini-2.5-flash", 
+            model="gemini-1.5-pro", 
             contents=prompt
         )
         return response.text
     except Exception as e:
-        return f"AI Summary currently unavailable: {str(e)}"
+        return f"Deep Analysis unavailable: {str(e)}"
 
-@st.cache_data(ttl=86400)
-def get_industry_fast(ticker):
-    """Cached industry lookup to prevent dashboard lag."""
+def get_fundamental_audit(ticker):
+    """Fetches real fundamental data to feed the AI for a specific stock."""
     try:
-        time.sleep(0.1)
-        return yf.Ticker(ticker).info.get('industry', 'N/A')
-    except:
-        return "N/A"
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        hist = stock.history(period="1y")
+        
+        audit_data = {
+            "Market Cap": info.get("marketCap"),
+            "Revenue Growth": info.get("revenueGrowth"),
+            "Profit Margins": info.get("profitMargins"),
+            "Free Cash Flow": info.get("freeCashflow"),
+            "Debt-to-Equity": info.get("debtToEquity"),
+            "Insider Ownership": info.get("heldPercentInsiders"),
+            "Short Ratio": info.get("shortRatio")
+        }
+        
+        prompt = f"""
+        Provide an EMERGENCY AUDIT for {ticker}.
+        DATA: {audit_data}
+        
+        DEEP RESEARCH TASKS:
+        1. FUNDAMENTAL HEALTH: Is this company actually making money or is it a 'zombie' stock?
+        2. INDUSTRY POSITION: Who are their competitors and do they have a tech/cost advantage?
+        3. RED FLAGS: Analyze the debt and short ratio. Is there a squeeze risk or bankruptcy risk?
+        4. 2026 OUTLOOK: Detailed research on why this stock could be a multi-bagger.
+        """
+        
+        response = client.models.generate_content(model="gemini-1.5-pro", contents=prompt)
+        return response.text, audit_data
+    except Exception as e:
+        return f"Fundamental lookup failed: {str(e)}", {}
 
 # --- 3. MAIN APP UI ---
 
@@ -67,50 +96,49 @@ if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
     
     if not df.empty:
-        # Processing
         df['Velocity %'] = (df['Slope'] / df['Price']) * 252 * 100
         df['Chart 📈'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
         
-        # Sidebar Controls
-        st.sidebar.header("🎯 Filters")
-        min_rvol = st.sidebar.slider("Min Relative Volume (RVOL)", 0.0, 10.0, 1.0)
-        min_vel = st.sidebar.slider("Min Velocity %", 0, 500, 20)
+        st.title("🏹 Institutional Multi-Bagger Intelligence")
         
-        df_filtered = df[(df['RVOL'] >= min_rvol) & (df['Velocity %'] >= min_vel)].copy()
-        df_filtered = df_filtered.sort_values(by="Velocity %", ascending=False)
-
-        # --- SECTION 1: AI STRATEGIC SUMMARY (TOP) ---
-        st.title("🏹 AI Multi-Bagger Command Center")
+        # --- TOP SECTION: BATCH STRATEGY ---
+        with st.expander("🌍 GLOBAL SECTOR & MOMENTUM ANALYSIS", expanded=True):
+            if st.button("🚀 Run Deep Sector Research (All Stocks)"):
+                with st.status("Performing comparative institutional research...", expanded=True):
+                    report = get_high_conviction_analysis(df)
+                st.markdown(report)
         
-        with st.container():
-            st.header("🤖 Today's Strategic Intelligence")
-            if not df_filtered.empty:
-                if st.button("🚀 Run AI Analysis"):
-                    with st.status("Analyzing top breakouts...", expanded=True):
-                        report = get_batch_summary(df_filtered)
-                    st.markdown(report)
-                else:
-                    st.info("Click the button above to analyze the current watchlist.")
-            else:
-                st.warning("Adjust filters to include stocks for AI analysis.")
+        st.markdown("---")
+        
+        # --- MIDDLE SECTION: INDIVIDUAL TICKER AUDIT ---
+        st.header("🔬 Individual Fundamental Audit")
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            target_ticker = st.selectbox("Select Ticker for Audit", df['Ticker'].unique())
+            run_audit = st.button("🔍 Run Full Fundamental Audit")
+        
+        with col2:
+            if run_audit:
+                with st.status(f"Auditing {target_ticker} balance sheet and industry position..."):
+                    audit_text, metrics = get_fundamental_audit(target_ticker)
+                
+                # Display Key Stats
+                m_cols = st.columns(3)
+                m_cols[0].metric("Rev Growth", f"{metrics.get('Revenue Growth', 0)*100:.1f}%")
+                m_cols[1].metric("Profit Margin", f"{metrics.get('Profit Margins', 0)*100:.1f}%")
+                m_cols[2].metric("Debt/Equity", metrics.get('Debt-to-Equity', 'N/A'))
+                
+                st.markdown(audit_text)
 
         st.markdown("---")
 
-        # --- SECTION 2: THE WATCHLIST (BOTTOM) ---
-        st.header(f"📊 Live Momentum Shortlist ({len(df_filtered)} stocks)")
-        
-        load_ind = st.checkbox("🔍 Load Industry & Sector Data", value=False)
-        if load_ind:
-            with st.spinner("Classifying sectors..."):
-                df_filtered['Industry'] = df_filtered['Ticker'].apply(get_industry_fast)
-
-        # High-Density Data Table
+        # --- BOTTOM SECTION: RAW DATA ---
+        st.header("📊 Momentum Watchlist Data")
         st.dataframe(
-            df_filtered,
+            df.sort_values("Velocity %", ascending=False),
             use_container_width=True,
             column_config={
-                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-                "Industry": st.column_config.TextColumn("Industry", width="medium"),
                 "Chart 📈": st.column_config.LinkColumn("Chart", display_text="View"),
                 "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
                 "Velocity %": st.column_config.NumberColumn("Velocity %", format="%.0f%%"),
@@ -120,6 +148,6 @@ if os.path.exists("daily_watchlist.csv"):
             hide_index=True
         )
     else:
-        st.warning("Daily scan is empty. Check your scanner logs.")
+        st.warning("Daily scan is empty.")
 else:
-    st.error("Missing 'daily_watchlist.csv'. Ensure the 6AM IST GitHub Action is running.")
+    st.error("Missing daily_watchlist.csv.")
