@@ -6,11 +6,11 @@ import time
 from google import genai
 
 # --- 1. SETTINGS & CLIENT INIT ---
-st.set_page_config(layout="wide", page_title="Institutional AI Dashboard")
+st.set_page_config(layout="wide", page_title="Momentum Command Center")
 
 if "GEMINI_API_KEY" in st.secrets:
     try:
-        # v1beta is the most stable for the 2026 Lite models
+        # Standard v1beta for high-quota lite models
         client = genai.Client(
             api_key=st.secrets["GEMINI_API_KEY"],
             http_options={'api_version': 'v1beta'} 
@@ -19,24 +19,24 @@ if "GEMINI_API_KEY" in st.secrets:
         st.sidebar.error(f"Client Init Error: {e}")
         client = None
 else:
-    st.sidebar.warning("🔑 Missing GEMINI_API_KEY.")
+    st.sidebar.warning("🔑 Missing GEMINI_API_KEY in Secrets.")
     client = None
 
-# --- 2. LOGIC FUNCTIONS ---
+# --- 2. CORE UTILITIES ---
 
 def call_ai_safe(prompt):
-    """Calls the high-limit Flash-Lite model with quota handling."""
+    """Calls the most stable Lite model for 2026 to avoid 404s."""
     if not client: return "AI Client not initialized."
     
-    # 2026 High-Quota Model for Free Users
-    model_id = "gemini-2.0-flash-lite-preview-02-05" 
+    # FIX: Using the universal stable alias for 2026
+    model_id = "gemini-2.0-flash-lite" 
     
     try:
         response = client.models.generate_content(model=model_id, contents=prompt)
         return response.text
     except Exception as e:
         if "429" in str(e):
-            return "⚠️ QUOTA EXHAUSTED: Please wait 60 seconds or try again tomorrow."
+            return "⚠️ QUOTA EXHAUSTED: Please wait 60 seconds."
         return f"AI Error: {str(e)}"
 
 @st.cache_data(ttl=86400)
@@ -46,14 +46,18 @@ def get_industry_metadata(ticker):
     except:
         return "N/A"
 
-# --- 3. MAIN UI ---
+# --- 3. MAIN UI LAYOUT ---
 
 if os.path.exists("daily_watchlist.csv"):
     df = pd.read_csv("daily_watchlist.csv")
+    
+    # Prep data
     df['Velocity %'] = (df['Slope'] / df['Price']) * 252 * 100
     df['Chart 📈'] = df['Ticker'].apply(lambda x: f"https://www.tradingview.com/symbols/{x}/")
     
-    # Sidebar Filters
+    st.title("🏹 Multi-Bagger Intel Dashboard")
+
+    # --- SIDEBAR FILTERS ---
     st.sidebar.header("🎯 Quality Filters")
     min_rvol = st.sidebar.slider("Min RVOL", 0.0, 10.0, 1.2)
     min_vel = st.sidebar.slider("Min Velocity %", 0, 500, 30)
@@ -61,46 +65,34 @@ if os.path.exists("daily_watchlist.csv"):
     df_filtered = df[(df['RVOL'] >= min_rvol) & (df['Velocity %'] >= min_vel)].copy()
     df_filtered = df_filtered.sort_values(by="Velocity %", ascending=False)
 
-    st.title("🏹 Multi-Bagger Intel Dashboard")
-
-    # --- SECTION 1: AI RESEARCH (PERSISTENT & DOWNLOADABLE) ---
+    # --- SECTION 1: AI RESEARCH (PERSISTENT & .TXT DOWNLOAD) ---
     st.header("🤖 Institutional Strategy Report")
     
-    # Initialize session state so reports survive internet drops/refreshes
+    # Session state to survive refreshes
     if 'persisted_report' not in st.session_state:
         st.session_state['persisted_report'] = None
 
-    col_btn1, col_btn2 = st.columns([1, 5])
-    
-    with col_btn1:
-        if st.button("🚀 Run AI Analysis"):
-            with st.spinner("Generating deep research..."):
-                # Optimize tokens by sending only essential columns
-                csv_data = df_filtered[['Ticker', 'RVOL', 'Velocity %']].head(12).to_csv(index=False)
-                prompt = f"""
-                Act as a Growth Fund Manager. Analyze these breakouts for 2026:
-                {csv_data}
-                1. Pick Top 5 multi-bagger candidates.
-                2. Explain the macro catalysts.
-                3. Call out risks or 'Fake' moves.
-                """
-                st.session_state['persisted_report'] = call_ai_safe(prompt)
+    if st.button("🚀 Run AI Analysis"):
+        with st.spinner("Analyzing top breakouts..."):
+            # Sending minimal data to save tokens
+            csv_data = df_filtered[['Ticker', 'RVOL', 'Velocity %']].head(12).to_csv(index=False)
+            prompt = f"Analyze these 180-day breakouts for 2026: {csv_data}. Pick Top 5 and explain catalysts."
+            st.session_state['persisted_report'] = call_ai_safe(prompt)
 
-    # If a report exists in memory, show it and enable download
     if st.session_state['persisted_report']:
         report_text = st.session_state['persisted_report']
         
-        # Download Button
+        # DOWNLOAD OPTION: TXT
         st.download_button(
-            label="📥 Download AI Report (.txt)",
+            label="📥 Download Report (.txt)",
             data=report_text,
-            file_name=f"Market_Analysis_{time.strftime('%Y%m%d_%H%M')}.txt",
+            file_name=f"AI_Report_{time.strftime('%Y%m%d')}.txt",
             mime="text/plain"
         )
         
         st.markdown(report_text)
         
-        if st.button("🗑️ Clear Report"):
+        if st.button("🗑️ Clear Saved Analysis"):
             st.session_state['persisted_report'] = None
             st.rerun()
 
@@ -117,7 +109,7 @@ if os.path.exists("daily_watchlist.csv"):
         df_filtered,
         use_container_width=True,
         column_config={
-            "Chart 📈": st.column_config.LinkColumn("Chart", display_text="View Chart"),
+            "Chart 📈": st.column_config.LinkColumn("Chart", display_text="View"),
             "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
             "Velocity %": st.column_config.NumberColumn("Velocity %", format="%.0f%%"),
             "RVOL": st.column_config.NumberColumn("Rel Vol", format="%.2fx"),
